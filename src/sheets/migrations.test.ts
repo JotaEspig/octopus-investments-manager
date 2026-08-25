@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { SCHEMA_VERSION, TRADES_SHEET } from './schema'
-import { MIGRATIONS, compareHeaders, pendingMigrations } from './migrations'
+import {
+  MIGRATIONS,
+  applyInOrder,
+  compareHeaders,
+  pendingMigrations,
+  type Migration,
+} from './migrations'
 
 /**
  * O registro de migrações é a única defesa contra alguém subir
@@ -52,6 +58,106 @@ describe('pendingMigrations', () => {
   it('vem em ordem crescente, para aplicar uma versão por vez', () => {
     const versions = pendingMigrations(0).map((m) => m.to)
     expect([...versions].sort((a, b) => a - b)).toEqual(versions)
+  })
+})
+
+/**
+ * Sair da v2 e chegar na v4 NÃO é um salto: é v2→v3→v4, uma etapa por vez.
+ *
+ * Nenhuma migração precisa saber de onde o usuário veio — a v4 só sabe
+ * transformar uma planilha v3, e é o encadeamento que garante que ela receba
+ * uma. Se cada migração tivesse que lidar com "veio da v1? da v2?", cada nova
+ * versão multiplicaria os caminhos possíveis.
+ */
+describe('corrente de v2 até v4', () => {
+  const fake = (to: number, touchesData = false): Migration => ({
+    to,
+    title: `Migração v${to}`,
+    description: `Descrição suficientemente longa da migração para a v${to}.`,
+    touchesData,
+    apply: async () => [`aplicou v${to}`],
+  })
+
+  const registry = [fake(2), fake(3, true), fake(4)]
+
+  it('devolve as duas etapas intermediárias, em ordem', () => {
+    expect(pendingMigrations(2, registry, 4).map((m) => m.to)).toEqual([3, 4])
+  })
+
+  it('quem está na v3 só pega a v4', () => {
+    expect(pendingMigrations(3, registry, 4).map((m) => m.to)).toEqual([4])
+  })
+
+  it('não avança além da versão que o código conhece', () => {
+    // Código na v3, registro já com a v4: a v4 fica de fora.
+    expect(pendingMigrations(2, registry, 3).map((m) => m.to)).toEqual([3])
+  })
+
+  it('basta UMA etapa tocar dados para a corrente inteira exigir cuidado', () => {
+    const pending = pendingMigrations(2, registry, 4)
+    expect(pending.some((m) => m.touchesData)).toBe(true)
+  })
+
+  it('aplica na ordem e grava a versão DEPOIS de cada etapa', async () => {
+    const order: string[] = []
+    const chain = await applyInOrder(pendingMigrations(2, registry, 4), {
+      apply: async (migration) => {
+        order.push(`apply:${migration.to}`)
+        return ['ok']
+      },
+      record: async (version) => {
+        order.push(`record:${version}`)
+      },
+    })
+
+    // O intercalado é o ponto: gravar só no fim tornaria a operação
+    // não-retomável.
+    expect(order).toEqual(['apply:3', 'record:3', 'apply:4', 'record:4'])
+    expect(chain.applied).toEqual([3, 4])
+    expect(chain.failedAt).toBeNull()
+  })
+
+  it('falhando na v4, a planilha fica registrada na v3 — e retoma daí', async () => {
+    const recorded: number[] = []
+    const chain = await applyInOrder(pendingMigrations(2, registry, 4), {
+      apply: async (migration) => {
+        if (migration.to === 4) throw new Error('a API do Google caiu no meio')
+        return ['ok']
+      },
+      record: async (version) => {
+        recorded.push(version)
+      },
+    })
+
+    expect(chain.applied).toEqual([3])
+    expect(chain.failedAt).toBe(4)
+    // A v3 ficou gravada: rodar de novo NÃO a reaplica sobre dados que ela já
+    // transformou, que é como se duplicaria uma correção.
+    expect(recorded).toEqual([3])
+    expect(chain.actions.at(-1)).toContain('a API do Google caiu no meio')
+  })
+
+  it('falhando na PRIMEIRA etapa, nada é gravado', async () => {
+    const recorded: number[] = []
+    const chain = await applyInOrder(pendingMigrations(2, registry, 4), {
+      apply: async () => {
+        throw new Error('falhou logo de cara')
+      },
+      record: async (version) => {
+        recorded.push(version)
+      },
+    })
+
+    expect(chain.applied).toEqual([])
+    expect(chain.failedAt).toBe(3)
+    expect(recorded).toEqual([])
+  })
+
+  it('um buraco no registro seria fatal — e é o que o teste do registro impede', () => {
+    // Sem a v3, sair da v2 aplicaria a v4 sobre uma planilha v2. A v4 espera
+    // uma v3 e transformaria a estrutura errada.
+    const comBuraco = [fake(2), fake(4)]
+    expect(pendingMigrations(2, comBuraco, 4).map((m) => m.to)).toEqual([4])
   })
 })
 

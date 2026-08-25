@@ -168,6 +168,16 @@ Cada versão tem uma entrada em `src/sheets/migrations.ts`, mesmo as aditivas:
 sem isso não daria para dizer, olhando só o registro, o que aconteceu entre
 duas versões.
 
+**Pular versões não existe.** Sair da v2 para a v4 é `v2 → v3 → v4`, uma etapa
+por vez, e a versão gravada sobe depois de **cada** etapa. É isso que torna a
+operação retomável: se a corrente quebrar no v4, a planilha fica registrada
+como v3 e rodar de novo aplica só o que falta — em vez de reaplicar o v3 sobre
+dados que ele já transformou.
+
+Cada migração só sabe transformar da versão imediatamente anterior. Nenhuma
+precisa perguntar "de onde este usuário veio?", porque o encadeamento garante
+que ela receba a estrutura que espera.
+
 O módulo já traz as primitivas para as mudanças destrutivas típicas —
 `insertColumn`, `deleteColumn`, `moveColumn`, `renameSheet`, `transformColumn`
 — para que a primeira delas seja escrita em três linhas, e não improvisada com

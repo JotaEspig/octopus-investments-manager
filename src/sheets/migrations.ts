@@ -426,10 +426,72 @@ export const MIGRATIONS: Migration[] = [
   },
 ]
 
-export function pendingMigrations(from: number): Migration[] {
-  return MIGRATIONS.filter((migration) => migration.to > from && migration.to <= SCHEMA_VERSION).sort(
-    (a, b) => a.to - b.to,
-  )
+/**
+ * O que falta rodar para sair de `from` e chegar na versão que o código conhece.
+ *
+ * Migrar da v2 para a v4 **não é um salto**: devolve `[v3, v4]`, em ordem, e a
+ * execução aplica uma de cada vez. Nenhuma migração precisa saber de onde o
+ * usuário está vindo — a v4 só sabe transformar uma planilha v3, e é
+ * responsabilidade daqui garantir que ela receba uma.
+ *
+ * `registry` e `target` são injetáveis só para os testes: em produção sempre
+ * são o registro real e o `SCHEMA_VERSION`.
+ */
+export function pendingMigrations(
+  from: number,
+  registry: readonly Migration[] = MIGRATIONS,
+  target: number = SCHEMA_VERSION,
+): Migration[] {
+  return registry
+    .filter((migration) => migration.to > from && migration.to <= target)
+    .sort((a, b) => a.to - b.to)
+}
+
+export interface MigrationRunner {
+  apply: (migration: Migration) => Promise<string[]>
+  /** Grava a versão alcançada. Chamada DEPOIS de cada migração, não no fim. */
+  record: (version: number) => Promise<void>
+}
+
+export interface AppliedChain {
+  actions: string[]
+  applied: number[]
+  /** Versão em que parou quando algo falhou; `null` quando tudo passou. */
+  failedAt: number | null
+}
+
+/**
+ * Aplica a corrente de migrações, uma versão por vez.
+ *
+ * A versão gravada sobe DEPOIS de cada etapa individual. Isso é o que torna a
+ * operação retomável: se a corrente v2→v3→v4 quebrar no v4, a planilha fica
+ * registrada como v3, e rodar de novo aplica só o v4 — em vez de repetir o v3
+ * sobre dados que ele já transformou, que é como se duplica uma correção.
+ */
+export async function applyInOrder(
+  migrations: readonly Migration[],
+  runner: MigrationRunner,
+): Promise<AppliedChain> {
+  const actions: string[] = []
+  const applied: number[] = []
+
+  for (const migration of migrations) {
+    let done: string[]
+    try {
+      done = await runner.apply(migration)
+    } catch (error) {
+      actions.push(
+        `v${migration.to} — FALHOU: ${error instanceof Error ? error.message : String(error)}`,
+      )
+      return { actions, applied, failedAt: migration.to }
+    }
+
+    await runner.record(migration.to)
+    applied.push(migration.to)
+    actions.push(`v${migration.to} — ${migration.title}`, ...done.map((line) => `   ${line}`))
+  }
+
+  return { actions, applied, failedAt: null }
 }
 
 // ---------------------------------------------------------------------------
@@ -526,13 +588,24 @@ export async function runMigrations(
   }
 
   const from = plan.currentVersion!
-  for (const migration of plan.pending) {
-    const done = await migration.apply(migrationContext)
-    actions.push(`v${migration.to} — ${migration.title}`, ...done.map((line) => `   ${line}`))
-    await writeSchemaVersion(context, migration.to)
+  const chain = await applyInOrder(plan.pending, {
+    apply: (migration) => migration.apply(migrationContext),
+    record: (version) => writeSchemaVersion(context, version),
+  })
+
+  actions.push(...chain.actions)
+
+  if (chain.failedAt !== null) {
+    const reached = chain.applied.at(-1) ?? from
+    throw new Error(
+      `Migração para a v${chain.failedAt} falhou. A planilha ficou na v${reached} — ` +
+        'rodar `npm run sheet:migrate` de novo retoma daí, sem repetir o que já passou.' +
+        (backups.length > 0 ? ` Backups: ${backups.join(', ')}.` : '') +
+        `\n\n${chain.actions.at(-1) ?? ''}`,
+    )
   }
 
-  return { actions, backups, from, to: plan.targetVersion }
+  return { actions, backups, from, to: chain.applied.at(-1) ?? from }
 }
 
 /** Mensagem de bloqueio usada pelo instalador. Fica aqui para não divergir. */
