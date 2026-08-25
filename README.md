@@ -46,6 +46,48 @@ npm run dev               # http://127.0.0.1:3000
 O mesmo instalador está na interface, em `/setup`, com diagnóstico do que já
 está pronto e do que falta.
 
+### O motor da planilha (Apps Script)
+
+Um passo manual sobra, e vale saber por quê: um script vinculado à planilha
+pertence a **você**, não à service account, então a API do Google não consegue
+criá-lo — e a API do Apps Script não cria gatilhos de tempo. São dois cliques,
+uma vez:
+
+1. Na planilha: **Extensões → Apps Script**, cole `apps-script/Code.gs` e salve.
+2. Recarregue a planilha e clique em **Carteira → Ativar atualização diária**.
+
+A página `/setup` mostra esse passo a passo com botão de copiar. Sem ele, a
+renda fixa não é precificada e o gráfico de 12 meses fica vazio.
+
+### O agente consultor
+
+```bash
+./install.sh              # instala agente, skills e o servidor MCP em ~/.claude
+./install.sh --uninstall  # remove tudo (a planilha não é tocada)
+```
+
+Instala o agente `consultor-investimentos`, três skills e o servidor MCP
+`carteira`. Depois disso o agente funciona de qualquer diretório: a
+configuração de acesso à planilha é copiada para
+`~/.config/carteira/config.json`, porque o servidor MCP é lançado de fora deste
+projeto e não enxerga o `.env.local`. A chave em si **não** é copiada — o
+arquivo guarda o caminho dela.
+
+Se rodar o `install.sh` antes de fazer o setup da planilha, ele avisa e instala
+o resto; rode de novo depois para gravar a configuração.
+
+| Tool MCP | O que devolve |
+|---|---|
+| `portfolio_summary` | Patrimônio total, alocação por classe, real vs. meta |
+| `portfolio_positions` | Posição, preço médio, cotação, rendimento |
+| `portfolio_asset` | Detalhe de um ativo + histórico + resgate com IR (renda fixa) |
+| `portfolio_trades` | Extrato filtrado |
+| `portfolio_performance` | Aportado, valor atual, retorno simples e XIRR |
+
+Todas são **somente leitura**, de propósito. O agente analisa, você registra —
+uma análise errada você percebe lendo, um lançamento errado contamina preço
+médio e imposto em silêncio.
+
 ## Comandos
 
 | Comando | O que faz |
@@ -61,10 +103,11 @@ está pronto e do que falta.
 ```
 src/domain/    regras de negócio puras, sem I/O — é o que os testes cobrem
 src/sheets/    schema.ts (o contrato da planilha), bootstrap e repositórios
-src/lib/       zod, dinheiro, câmbio, configuração
+src/lib/       zod, dinheiro, câmbio, datas, configuração
 src/app/       interface e rotas de API do Next
 apps-script/   Code.gs — CDI, marcação de RF e snapshot mensal
 mcp/           servidor MCP (somente leitura) para o agente
+.claude/       agente e skills que o install.sh publica em ~/.claude
 ```
 
 Duas regras sustentam o desenho:
@@ -77,6 +120,23 @@ Duas regras sustentam o desenho:
 - **`Operações` é append-only.** É o livro-razão. Posição e preço médio são
   projeções dele, nunca campos guardados: dá auditoria e permite recalcular
   tudo do zero.
+
+## Uma duplicação consciente
+
+O preço médio é calculado em **dois lugares**: nas fórmulas das abas de
+apresentação e em `src/domain/`. Não é descuido — é o preço de a planilha
+funcionar no celular sem nada rodando. `src/domain/` é a autoridade; a fórmula
+é o espelho.
+
+`npm run verify:sheet` é o guarda dessa duplicação: compara as duas contas
+ativo a ativo e falha se divergirem mais de um centavo. Também acusa fórmulas
+quebradas — o sintoma clássico de locale trocado, em que o Sheets espera `,`
+onde escrevemos `;`. Rode depois de todo `sheet:install` e sempre que mexer
+numa fórmula.
+
+O mesmo vale para `apps-script/Code.gs`, que reimplementa a marcação na curva
+de `src/domain/fixed-income.ts` porque não dá para importar TypeScript lá
+dentro. Mexeu num, mexa no outro.
 
 ## Aviso
 
