@@ -1,0 +1,20 @@
+# dependências
+node_modules/
+
+# build
+.next/
+out/
+dist/
+*.tsbuildinfo
+
+# segredos — NUNCA versionar
+.env
+.env.local
+.env*.local
+secrets/
+*.service-account.json
+
+# ferramentas
+coverage/
+.DS_Store
+*.log
