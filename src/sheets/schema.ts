@@ -16,11 +16,37 @@ import { ASSET_CLASSES, ASSET_CLASS_LABELS, type AssetClass, type Currency } fro
 export const SCHEMA_VERSION = 2
 
 /**
- * Locale e fuso da planilha: definem como datas e moeda aparecem, e também
- * qual dialeto de fórmula o Sheets espera (ver `FORMULA_TOKEN` abaixo).
+ * Locale da planilha: define como datas e moeda aparecem, e também qual
+ * dialeto de fórmula o Sheets espera (ver `FORMULA_TOKEN` abaixo).
  */
 export const SPREADSHEET_LOCALE = 'pt_BR'
-export const SPREADSHEET_TIME_ZONE = 'America/Sao_Paulo'
+
+/** Usado quando o sistema não consegue informar o próprio fuso. */
+export const FALLBACK_TIME_ZONE = 'America/Sao_Paulo'
+
+/**
+ * Fuso da planilha — DETECTADO da máquina, não presumido.
+ *
+ * O Sheets não tem tipo de data com fuso: uma célula guarda um número que
+ * significa "relógio de parede no fuso DA PLANILHA". Então `=NOW()` devolve a
+ * hora naquele fuso — e com a planilha em `Etc/GMT`, o Painel mostrava três
+ * horas no futuro para quem está no Brasil.
+ *
+ * Como não existe "guardar UTC e exibir local" dentro da mesma célula, o certo
+ * é a planilha viver no fuso de quem a lê. Detectar, em vez de fixar
+ * `America/Sao_Paulo`, faz isso valer em qualquer lugar — é o que torna a hora
+ * exibida a hora DA PESSOA, e não a de uma constante no código.
+ *
+ * Os carimbos que máquina lê (`exportedAt` da exportação, `updatedAt` do MCP)
+ * seguem em UTC ISO 8601, que é onde gravar em UTC de fato importa.
+ */
+export function resolveTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || FALLBACK_TIME_ZONE
+  } catch {
+    return FALLBACK_TIME_ZONE
+  }
+}
 
 /**
  * DIALETO DAS FÓRMULAS — e por que ele é detectado, não presumido.

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { ASSET_CLASSES } from '@/domain/types'
 import {
   DIALECT_PROBE,
+  FALLBACK_TIME_ZONE,
   FORMULA_TOKEN,
   VIEW_FIRST_ROW,
   VIEW_SHEETS,
@@ -9,6 +10,7 @@ import {
   localizeFormula,
   localizeValue,
   ref,
+  resolveTimeZone,
 } from './schema'
 
 /**
@@ -36,6 +38,28 @@ function isBalanced(formula: string): boolean {
   }
   return stack.length === 0 && !insideString
 }
+
+/**
+ * O Sheets não tem data com fuso: a célula guarda relógio de parede no fuso da
+ * planilha. Com a planilha em `Etc/GMT`, o `=NOW()` do Painel aparecia três
+ * horas no futuro para quem está no Brasil — foi assim que o bug apareceu.
+ */
+describe('resolveTimeZone', () => {
+  it('devolve um fuso IANA válido', () => {
+    const zone = resolveTimeZone()
+    expect(zone).toMatch(/^[A-Za-z]+\/[A-Za-z_+\-0-9/]+$|^UTC$/)
+    // Se for válido, o Intl aceita sem lançar.
+    expect(() => new Intl.DateTimeFormat('pt-BR', { timeZone: zone })).not.toThrow()
+  })
+
+  it('o fallback também é um fuso válido', () => {
+    expect(() => new Intl.DateTimeFormat('pt-BR', { timeZone: FALLBACK_TIME_ZONE })).not.toThrow()
+  })
+
+  it('nunca devolve vazio', () => {
+    expect(resolveTimeZone().length).toBeGreaterThan(0)
+  })
+})
 
 describe('localizeFormula', () => {
   it('mantém o dialeto ponto-e-vírgula intacto', () => {

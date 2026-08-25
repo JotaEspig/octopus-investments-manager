@@ -54,7 +54,17 @@ export interface CarteiraExport {
   format: typeof EXPORT_FORMAT
   formatVersion: number
   exportedAt: string
-  spreadsheet: { id: string; title: string; url: string }
+  spreadsheet: {
+    id: string
+    title: string
+    url: string
+    /**
+     * Fuso da planilha. Sem ele, uma data como `25/08/2026 20:07` no dump seria
+     * ambígua: célula de data no Sheets é relógio de parede, não instante.
+     * `exportedAt` acima é UTC ISO — este campo é o que torna o resto legível.
+     */
+    timeZone: string
+  }
   schemaVersion: number | null
   integrity: {
     /** SHA-256 do bloco `sheets`, para detectar arquivo truncado ou editado. */
@@ -283,6 +293,7 @@ export async function buildExport(context: SheetsContext): Promise<CarteiraExpor
       id: spreadsheetId,
       title: meta.properties?.title ?? 'planilha',
       url: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`,
+      timeZone: meta.properties?.timeZone ?? 'desconhecido',
     },
     schemaVersion,
     integrity: {

@@ -14,7 +14,7 @@ import {
   SCHEMA_VERSION,
   SHEET,
   SPREADSHEET_LOCALE,
-  SPREADSHEET_TIME_ZONE,
+  resolveTimeZone,
   VIEW_FIRST_ROW,
   VIEW_ROWS,
   VIEW_SHEETS,
@@ -317,17 +317,36 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
     throw new Error(explainSheetsError(error, context))
   }
 
-  // --- 1. Locale ----------------------------------------------------------
-  // Precisa vir ANTES de qualquer fórmula: é ele que decide o dialeto.
+  // --- 1. Locale e fuso ---------------------------------------------------
+  //
+  // Conferidos SEPARADAMENTE, de propósito. Já estiveram na mesma condição, e
+  // o resultado foi que uma planilha criada com locale pt_BR nunca recebia o
+  // fuso: ficava em Etc/GMT e o `=NOW()` do Painel mostrava três horas no
+  // futuro. Duas propriedades independentes, duas verificações.
+  //
+  // Precisa vir ANTES de qualquer fórmula: é o locale que decide o dialeto.
   const setupRequests: sheets_v4.Schema$Request[] = []
+  const timeZone = resolveTimeZone()
+
   if (meta.properties?.locale !== SPREADSHEET_LOCALE) {
     setupRequests.push({
       updateSpreadsheetProperties: {
-        properties: { locale: SPREADSHEET_LOCALE, timeZone: SPREADSHEET_TIME_ZONE },
-        fields: 'locale,timeZone',
+        properties: { locale: SPREADSHEET_LOCALE },
+        fields: 'locale',
       },
     })
     actions.push(`Locale ajustado para ${SPREADSHEET_LOCALE}`)
+  }
+
+  if (meta.properties?.timeZone !== timeZone) {
+    setupRequests.push({
+      updateSpreadsheetProperties: { properties: { timeZone }, fields: 'timeZone' },
+    })
+    actions.push(
+      `Fuso ajustado para ${timeZone}${
+        meta.properties?.timeZone ? ` (era ${meta.properties.timeZone})` : ''
+      }`,
+    )
   }
 
   // --- 2. Abas faltantes --------------------------------------------------
