@@ -55,7 +55,12 @@ export function loadConfig(): CarteiraConfig {
 
   return {
     spreadsheetId,
-    serviceAccountPath: isAbsolute(rawPath) ? rawPath : resolve(process.cwd(), rawPath),
+    // O caminho vem de configuração, então o Turbopack não consegue provar que
+    // ele fica dentro do projeto e, por precaução, incluiria o repositório
+    // inteiro no bundle. Aqui isso não importa: a app só roda local.
+    serviceAccountPath: isAbsolute(rawPath)
+      ? rawPath
+      : resolve(/* turbopackIgnore: true */ process.cwd(), rawPath),
   }
 }
 

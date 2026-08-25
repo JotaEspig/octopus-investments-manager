@@ -25,8 +25,13 @@ export const SCHEMA_VERSION = 1
 export const SPREADSHEET_LOCALE = 'pt_BR'
 export const SPREADSHEET_TIME_ZONE = 'America/Sao_Paulo'
 
-/** Quantas linhas de fórmula cada aba de apresentação replica. */
-export const VIEW_ROWS = 200
+/**
+ * Quantas linhas de fórmula cada aba de apresentação replica — o teto de
+ * ativos por classe. Cem é folgado para uma carteira pessoal; se um dia
+ * estourar, as abas param de listar em silêncio, e é por isso que
+ * `verify:sheet` confere a contagem.
+ */
+export const VIEW_ROWS = 100
 
 /** Primeira linha de dados nas abas de apresentação (1 = título, 2 = cabeçalho). */
 export const VIEW_FIRST_ROW = 3
