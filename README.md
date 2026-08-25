@@ -94,9 +94,41 @@ médio e imposto em silêncio.
 |---|---|
 | `npm run dev` | Interface em `127.0.0.1:3000` |
 | `npm run sheet:install` | Constrói/atualiza a estrutura da planilha (idempotente) |
+| `npm run sheet:style` | Repinta a planilha. Só aparência — não lê nem escreve valor nenhum |
+| `npm run sheet:reset` | **Apaga tudo.** Pede confirmação digitando o nome da planilha |
 | `npm run verify:sheet` | Compara as posições calculadas em TS com as fórmulas da planilha |
 | `npm test` | Testes do domínio (puros, sem rede) |
 | `npm run typecheck` | `tsc --noEmit` |
+
+### `sheet:style`
+
+Cor de aba por classe, cabeçalhos coloridos, alinhamento por natureza do dado
+(número à direita para as casas decimais alinharem na vertical, data ao centro,
+texto à esquerda), listras alternadas, grade escondida e ganho/perda em verde e
+vermelho.
+
+É **substitutivo**: listras e regras condicionais antigas são removidas antes
+das novas, então rodar dez vezes dá o mesmo resultado de rodar uma. Como não
+toca em valor de célula, é seguro rodar com a carteira cheia — e é o jeito de
+voltar ao padrão se você mexeu no visual à mão.
+
+O `sheet:install` já chama a estilização no fim; este comando existe para
+repintar sem reinstalar.
+
+### `sheet:reset`
+
+Apaga **todas** as abas e devolve a planilha ao estado de recém-criada.
+Destrutivo e irreversível — o Sheets tem histórico de versões, mas contar com
+isso não é plano.
+
+Antes de agir ele mostra o que será perdido (quantas operações, ativos e
+contratos) e exige que você **digite o nome da planilha** para confirmar, no
+estilo do GitHub para apagar repositório. Digitar "s" é reflexo; digitar o nome
+obriga a ler a tela.
+
+Não existe `--force`, de propósito: uma porta dos fundos aqui anularia o único
+mecanismo que protege anos de histórico de aportes. O Apps Script colado na
+planilha sobrevive ao reset — ele vive fora das abas.
 
 ## Estrutura
 
@@ -117,6 +149,19 @@ Duas regras sustentam o desenho:
   `Config`). As abas visuais (`Painel`, `Ações EUA`, `ETFs`, `Ações BR`, `FIIs`,
   `Renda Fixa`) são derivadas por fórmula — reformatar, mover gráfico e trocar
   cor não quebra nada.
+- **Estrutura ≠ aparência.** `bootstrap.ts` cria abas, fórmulas e gráficos;
+  `styling.ts` cuida de como aquilo se parece. É o que permite repintar sem
+  risco de quebrar um cálculo.
+
+## As duas porcentagens
+
+Elas respondem perguntas diferentes e por isso convivem:
+
+- **`% da classe`**, nas abas por tipo e na tabela de ativos do Painel — o peso
+  do ativo dentro da própria classe. "BBAS3 é 20%" quer dizer 20% das suas
+  ações brasileiras.
+- **`% atual`**, na tabela de alocação do Painel — o peso da classe na carteira
+  inteira, que é o que se compara com a meta para decidir rebalanceamento.
 - **`Operações` é append-only.** É o livro-razão. Posição e preço médio são
   projeções dele, nunca campos guardados: dá auditoria e permite recalcular
   tudo do zero.

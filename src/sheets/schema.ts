@@ -9,21 +9,78 @@
  * Mudou uma coluna de lugar? Suba `SCHEMA_VERSION` e rode `npm run sheet:install`.
  */
 
-import { ASSET_CLASSES, type AssetClass, type Currency } from '@/domain/types'
+import { ASSET_CLASSES, ASSET_CLASS_LABELS, type AssetClass, type Currency } from '@/domain/types'
 
 /** Gravada em `Config`. O instalador compara e avisa quando a planilha está velha. */
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 
 /**
- * O Sheets interpreta fórmulas conforme o LOCALE da planilha: `pt_BR` separa
- * argumentos com `;`, `en_US` com `,`. O bootstrap fixa o locale abaixo ANTES
- * de escrever qualquer fórmula, e por isso todas aqui usam `;`.
- *
- * Se as células aparecerem com `#ERROR!` ou `#NAME?` logo após a instalação,
- * este é o suspeito número um.
+ * Locale e fuso da planilha: definem como datas e moeda aparecem, e também
+ * qual dialeto de fórmula o Sheets espera (ver `FORMULA_TOKEN` abaixo).
  */
 export const SPREADSHEET_LOCALE = 'pt_BR'
 export const SPREADSHEET_TIME_ZONE = 'America/Sao_Paulo'
+
+/**
+ * DIALETO DAS FÓRMULAS — e por que ele é detectado, não presumido.
+ *
+ * O Sheets interpreta uma fórmula conforme o locale da planilha, e locales
+ * diferentes usam pontuação diferente:
+ *
+ *                      argumentos   coluna de matriz   linha de matriz
+ *   pt_BR                  ;              \                  ;
+ *   en_US                  ,              ,                  ;
+ *
+ * Reparem que `;` significa coisas diferentes nos dois — por isso não dá para
+ * converter um no outro com um replace ingênuo. As fórmulas deste arquivo são
+ * escritas no dialeto `;` e os dois pontos ambíguos (só a tabela de ativos do
+ * Painel usa literal de matriz) são marcados com tokens.
+ *
+ * O bootstrap descobre o dialeto certo escrevendo uma fórmula-sonda e lendo o
+ * resultado, em vez de apostar. Sem isso, um locale inesperado encheria a
+ * planilha de `#ERROR!` em silêncio.
+ */
+export const FORMULA_TOKEN = {
+  arg: '\u0001',
+  arrayColumn: '\u0002',
+  arrayRow: '\u0003',
+} as const
+
+export type FormulaDialect = 'semicolon' | 'comma'
+
+export const FORMULA_DIALECTS: Record<
+  FormulaDialect,
+  { arg: string; arrayColumn: string; arrayRow: string }
+> = {
+  semicolon: { arg: ';', arrayColumn: '\\', arrayRow: ';' },
+  comma: { arg: ',', arrayColumn: ',', arrayRow: ';' },
+}
+
+/** Fórmula-sonda: se voltar `OK`, o dialeto está certo. */
+export const DIALECT_PROBE = '=IF(1=1;"OK";"FAIL")'
+export const DIALECT_PROBE_EXPECTED = 'OK'
+
+/**
+ * Traduz uma fórmula do dialeto de escrita para o da planilha.
+ *
+ * A ordem importa: o `;` genérico é trocado ANTES dos tokens, senão a troca
+ * seguinte reverteria o separador de linha de matriz que acabou de ser posto.
+ */
+export function localizeFormula(formula: string, dialect: FormulaDialect): string {
+  const separators = FORMULA_DIALECTS[dialect]
+  const withArgs = separators.arg === ';' ? formula : formula.replaceAll(';', separators.arg)
+  return withArgs
+    .replaceAll(FORMULA_TOKEN.arg, separators.arg)
+    .replaceAll(FORMULA_TOKEN.arrayColumn, separators.arrayColumn)
+    .replaceAll(FORMULA_TOKEN.arrayRow, separators.arrayRow)
+}
+
+/** Aplica `localizeFormula` só no que é fórmula; texto e número passam intactos. */
+export function localizeValue(value: unknown, dialect: FormulaDialect): unknown {
+  return typeof value === 'string' && value.startsWith('=')
+    ? localizeFormula(value, dialect)
+    : value
+}
 
 /**
  * Quantas linhas de fórmula cada aba de apresentação replica — o teto de
@@ -330,6 +387,26 @@ export interface ViewSheetSpec {
   totalRangeName: string
 }
 
+/**
+ * Intervalo nomeado com o total de cada aba de classe.
+ *
+ * O Painel e a coluna "% da classe" referenciam o total por NOME, não por
+ * célula: mexer no layout de uma aba não quebra quem depende dela.
+ */
+const TOTAL_RANGE_NAME: Record<AssetClass, string> = {
+  us_stock: 'TOTAL_US_STOCK',
+  us_etf: 'TOTAL_US_ETF',
+  br_stock: 'TOTAL_BR_STOCK',
+  br_fii: 'TOTAL_BR_FII',
+  fixed_income: 'TOTAL_FIXED_INCOME',
+}
+
+/** Cabeçalho da coluna somada para dar o total da aba. Sempre em reais. */
+const TOTAL_HEADER = 'Valor (R$)'
+
+/** Participação do ativo dentro da própria classe — o que você pediu ver. */
+const CLASS_SHARE_HEADER = '% da classe'
+
 const trades = (range: string) => ref(SHEET.trades, range)
 const assets = (range: string) => ref(SHEET.assets, range)
 const quotes = (range: string) => ref(SHEET.quotes, range)
@@ -421,10 +498,18 @@ function marketColumns(assetClass: AssetClass): ViewColumnSpec[] {
       formula: (row) => guarded(row, `IFERROR($I${row}/$F${row};0)`),
     },
     {
-      header: 'Valor (R$)',
+      header: TOTAL_HEADER,
       format: 'brl',
       width: 140,
       formula: (row) => guarded(row, toBRL(`$G${row}`)),
+    },
+    {
+      // Peso do ativo DENTRO da classe, não na carteira inteira: "BBAS3 é 20%
+      // das minhas ações brasileiras". Para o peso na carteira toda, o Painel.
+      header: CLASS_SHARE_HEADER,
+      format: 'percent',
+      width: 110,
+      formula: (row) => guarded(row, `IFERROR($K${row}/${TOTAL_RANGE_NAME[assetClass]};0)`),
     },
   ]
 }
@@ -493,29 +578,29 @@ const fixedIncomeColumns: ViewColumnSpec[] = [
     formula: (row) => guarded(row, `IFERROR($I${row}/$G${row};0)`),
   },
   {
-    header: 'Valor (R$)',
+    header: TOTAL_HEADER,
     format: 'brl',
     width: 140,
     formula: (row) => guarded(row, `$H${row}`),
   },
+  {
+    header: CLASS_SHARE_HEADER,
+    format: 'percent',
+    width: 110,
+    formula: (row) => guarded(row, `IFERROR($K${row}/${TOTAL_RANGE_NAME.fixed_income};0)`),
+  },
 ]
-
-const TOTAL_RANGE_NAME: Record<AssetClass, string> = {
-  us_stock: 'TOTAL_US_STOCK',
-  us_etf: 'TOTAL_US_ETF',
-  br_stock: 'TOTAL_BR_STOCK',
-  br_fii: 'TOTAL_BR_FII',
-  fixed_income: 'TOTAL_FIXED_INCOME',
-}
 
 export const VIEW_SHEETS: ViewSheetSpec[] = ASSET_CLASSES.map((assetClass) => {
   const columns = assetClass === 'fixed_income' ? fixedIncomeColumns : marketColumns(assetClass)
+  const totalColumn = columns.findIndex((column) => column.header === TOTAL_HEADER)
+  if (totalColumn < 0) throw new Error(`Aba ${VIEW_SHEET[assetClass]} sem a coluna "${TOTAL_HEADER}"`)
+
   return {
     title: VIEW_SHEET[assetClass],
     assetClass,
     columns,
-    // Por construção, `Valor (R$)` é sempre a última coluna das duas variantes.
-    totalColumn: columns.length - 1,
+    totalColumn,
     totalRangeName: TOTAL_RANGE_NAME[assetClass],
   }
 })
@@ -537,9 +622,53 @@ export const DASHBOARD = {
   allocationFirstRow: 8,
   /** Linha onde os gráficos são ancorados. */
   chartRow: 15,
+  /** A tabela de ativos vem depois dos gráficos, que ocupam ~18 linhas. */
+  assetsTitleRow: 34,
+  assetsHeaderRow: 35,
+  assetsFirstRow: 36,
 } as const
 
 export const DASHBOARD_ALLOCATION_HEADERS = ['Classe', 'Valor (R$)', '% atual', 'Meta', 'Desvio']
+
+export const DASHBOARD_ASSETS_HEADERS = ['Ativo', 'Classe', 'Valor (R$)', CLASS_SHARE_HEADER]
+
+/**
+ * Tabela de todos os ativos no Painel, ordenada por valor.
+ *
+ * Uma fórmula só: empilha as abas de classe num literal de matriz, descarta as
+ * linhas vazias e ordena decrescente. A coluna de porcentagem é a participação
+ * do ativo NA PRÓPRIA CLASSE — cada aba já a calcula, e aqui ela só é
+ * transportada, então "BBAS3 20%" quer dizer 20% das ações brasileiras, não 20%
+ * do patrimônio.
+ *
+ * É o único ponto do projeto que usa literal de matriz, e portanto o único que
+ * depende dos separadores ambíguos — daí os tokens em vez de pontuação literal.
+ */
+export function dashboardAssetsFormula(): string {
+  const c = FORMULA_TOKEN.arrayColumn
+  const lastRow = VIEW_FIRST_ROW + VIEW_ROWS - 1
+
+  const blocks = VIEW_SHEETS.map((spec) => {
+    const symbols = ref(spec.title, `$A$${VIEW_FIRST_ROW}:$A$${lastRow}`)
+    const values = ref(spec.title, `$K$${VIEW_FIRST_ROW}:$K$${lastRow}`)
+    const shares = ref(spec.title, `$L$${VIEW_FIRST_ROW}:$L$${lastRow}`)
+    const label = ASSET_CLASS_LABELS[spec.assetClass]
+
+    // O fallback mantém 4 colunas quando a classe está vazia: sem ele, um
+    // FILTER sem resultado devolve #N/A e derruba a pilha inteira.
+    return (
+      `IFERROR(FILTER(` +
+      `{${symbols}${c}IF(${symbols}<>"";"${label}";"")${c}${values}${c}${shares}};` +
+      `${symbols}<>"");` +
+      `{""${c}""${c}0${c}0})`
+    )
+  })
+
+  const stack = `{${blocks.join(FORMULA_TOKEN.arrayRow)}}`
+  // LET evita repetir a pilha inteira duas vezes (uma para filtrar, outra para
+  // ordenar). FILTER descarta as linhas de fallback das classes vazias.
+  return `=IFERROR(LET(dados;${stack};SORT(FILTER(dados;INDEX(dados;;3)>0);3;FALSE));"")`
+}
 
 export const NAMED_RANGE = {
   fx: 'CAMBIO',

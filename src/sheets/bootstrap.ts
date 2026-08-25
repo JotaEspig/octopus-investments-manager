@@ -3,13 +3,14 @@ import { ASSET_CLASSES, ASSET_CLASS_LABELS } from '@/domain/types'
 import {
   CONFIG_FX_ROW,
   CONFIG_ROWS,
-  CONFIG_SHEET,
   DASHBOARD,
   DASHBOARD_ALLOCATION_HEADERS,
+  DASHBOARD_ASSETS_HEADERS,
   DATA_SHEETS,
+  DIALECT_PROBE,
+  DIALECT_PROBE_EXPECTED,
   HISTORY_CHART_ROWS,
   NAMED_RANGE,
-  NUMBER_FORMAT,
   SCHEMA_VERSION,
   SHEET,
   SPREADSHEET_LOCALE,
@@ -17,26 +18,32 @@ import {
   VIEW_FIRST_ROW,
   VIEW_ROWS,
   VIEW_SHEETS,
-  CLASS_CURRENCY,
+  dashboardAssetsFormula,
+  localizeValue,
   ref,
-  type ColumnFormat,
   type DataSheetSpec,
+  type FormulaDialect,
   type ViewSheetSpec,
 } from './schema'
 import { explainSheetsError, type SheetsContext } from './client'
+import { applyStyling } from './styling'
 
 /**
- * Instalador da planilha.
+ * Instalador da planilha — a ESTRUTURA.
  *
- * Constrói toda a estrutura a partir de `schema.ts`: abas, cabeçalhos,
- * fórmulas, formatação, intervalos nomeados e gráficos. É **idempotente** —
- * rodar de novo conserta o que estiver faltando e não duplica nada nem toca
- * nos dados já cadastrados.
+ * Cria abas, escreve cabeçalhos e fórmulas, define intervalos nomeados e os
+ * gráficos do Painel. A aparência é responsabilidade de `styling.ts`, chamado
+ * no fim: assim `npm run sheet:style` repinta sem tocar em conteúdo, e mexer
+ * no visual não arrisca quebrar um cálculo.
+ *
+ * É **idempotente** — rodar de novo conserta o que estiver faltando, não
+ * duplica nada e não encosta nos dados já cadastrados.
  *
  * O que ele deliberadamente NÃO reescreve:
  * - linhas de dados em `Operações`, `Ativos`, `Contratos RF`, `CDI`, `Histórico`
  * - chaves de `Config` que já existem (as metas de alocação são suas para editar)
  * - fórmulas de `Cotações` (a escapatória quando o GOOGLEFINANCE falha)
+ * - gráficos já criados (preservam ajuste manual de posição e cor)
  */
 
 export interface BootstrapReport {
@@ -49,8 +56,6 @@ export interface BootstrapReport {
 /** Nomes que o Google dá à aba única de uma planilha nova. */
 const DEFAULT_SHEET_TITLES = new Set(['Sheet1', 'Página1', 'Planilha1', 'Folha1'])
 
-const HEADER_BACKGROUND = { red: 0.937, green: 0.945, blue: 0.961 }
-
 export function columnLetter(index: number): string {
   let letter = ''
   let value = index
@@ -61,68 +66,9 @@ export function columnLetter(index: number): string {
   return letter
 }
 
-/** Ordem das abas na planilha: painel, seções por classe, depois os dados. */
+/** Ordem das abas: painel, seções por classe, depois os dados. */
 function desiredSheetOrder(): string[] {
   return [DASHBOARD.title, ...VIEW_SHEETS.map((view) => view.title), ...DATA_SHEETS.map((s) => s.title)]
-}
-
-function numberFormatRequest(
-  sheetId: number,
-  columnIndex: number,
-  firstDataRow: number,
-  format: ColumnFormat,
-): sheets_v4.Schema$Request | null {
-  const pattern = NUMBER_FORMAT[format]
-  if (!pattern) return null
-  return {
-    repeatCell: {
-      range: {
-        sheetId,
-        startRowIndex: firstDataRow - 1,
-        startColumnIndex: columnIndex,
-        endColumnIndex: columnIndex + 1,
-      },
-      cell: { userEnteredFormat: { numberFormat: pattern } },
-      fields: 'userEnteredFormat.numberFormat',
-    },
-  }
-}
-
-function headerStyleRequest(sheetId: number, headerRow: number, columnCount: number): sheets_v4.Schema$Request {
-  return {
-    repeatCell: {
-      range: {
-        sheetId,
-        startRowIndex: headerRow - 1,
-        endRowIndex: headerRow,
-        startColumnIndex: 0,
-        endColumnIndex: columnCount,
-      },
-      cell: {
-        userEnteredFormat: {
-          backgroundColor: HEADER_BACKGROUND,
-          textFormat: { bold: true },
-        },
-      },
-      fields: 'userEnteredFormat(backgroundColor,textFormat)',
-    },
-  }
-}
-
-function widthRequests(sheetId: number, widths: Array<number | undefined>): sheets_v4.Schema$Request[] {
-  return widths.flatMap((width, index) =>
-    width
-      ? [
-          {
-            updateDimensionProperties: {
-              range: { sheetId, dimension: 'COLUMNS', startIndex: index, endIndex: index + 1 },
-              properties: { pixelSize: width },
-              fields: 'pixelSize',
-            },
-          },
-        ]
-      : [],
-  )
 }
 
 // ---------------------------------------------------------------------------
@@ -162,10 +108,7 @@ function viewSheetContent(spec: ViewSheetSpec): ValueRange[] {
     {
       range: ref(spec.title, `${columnLetter(spec.totalColumn - 1)}1:${totalColumnLetter}1`),
       values: [
-        [
-          'Total (R$)',
-          `=SUM(${totalColumnLetter}${VIEW_FIRST_ROW}:${totalColumnLetter}${lastRow})`,
-        ],
+        ['Total (R$)', `=SUM(${totalColumnLetter}${VIEW_FIRST_ROW}:${totalColumnLetter}${lastRow})`],
       ],
     },
     {
@@ -211,34 +154,18 @@ function dashboardContent(): ValueRange[] {
       values: [DASHBOARD_ALLOCATION_HEADERS],
     },
     { range: ref(DASHBOARD.title, `A${firstRow}:E${lastRow}`), values: allocationRows },
-  ]
-}
-
-/** Verde para ganho, vermelho para perda — tons legíveis nos dois temas do Sheets. */
-function returnColorRules(sheetId: number, columnIndex: number): sheets_v4.Schema$Request[] {
-  const range = {
-    sheetId,
-    startRowIndex: VIEW_FIRST_ROW - 1,
-    endRowIndex: VIEW_FIRST_ROW + VIEW_ROWS - 1,
-    startColumnIndex: columnIndex,
-    endColumnIndex: columnIndex + 1,
-  }
-
-  const rule = (type: string, color: { red: number; green: number; blue: number }) => ({
-    addConditionalFormatRule: {
-      rule: {
-        ranges: [range],
-        booleanRule: {
-          condition: { type, values: [{ userEnteredValue: '0' }] },
-          format: { textFormat: { foregroundColor: color } },
-        },
-      },
+    {
+      range: ref(DASHBOARD.title, `A${DASHBOARD.assetsTitleRow}`),
+      values: [['Ativos — participação dentro da própria classe']],
     },
-  })
-
-  return [
-    rule('NUMBER_GREATER', { red: 0.06, green: 0.5, blue: 0.25 }),
-    rule('NUMBER_LESS', { red: 0.72, green: 0.15, blue: 0.15 }),
+    {
+      range: ref(DASHBOARD.title, `A${DASHBOARD.assetsHeaderRow}:D${DASHBOARD.assetsHeaderRow}`),
+      values: [DASHBOARD_ASSETS_HEADERS],
+    },
+    {
+      range: ref(DASHBOARD.title, `A${DASHBOARD.assetsFirstRow}`),
+      values: [[dashboardAssetsFormula()]],
+    },
   ]
 }
 
@@ -324,6 +251,49 @@ function chartRequests(dashboardId: number, historyId: number): sheets_v4.Schema
 }
 
 // ---------------------------------------------------------------------------
+// Dialeto das fórmulas
+// ---------------------------------------------------------------------------
+
+/**
+ * Descobre se esta planilha espera `;` ou `,` entre argumentos, escrevendo uma
+ * fórmula-sonda e lendo o resultado.
+ *
+ * Detectar em vez de presumir custa duas requisições e elimina o modo de falha
+ * mais silencioso do projeto: um locale inesperado transformaria cada fórmula
+ * num `#ERROR!`, com a planilha parecendo instalada.
+ *
+ * A sonda vai numa célula bem longe (`Z1` de `Config`) e é apagada em seguida.
+ */
+async function detectDialect(
+  context: SheetsContext,
+  probeCell: string,
+): Promise<{ dialect: FormulaDialect; probed: boolean }> {
+  const { api, spreadsheetId } = context
+
+  for (const dialect of ['semicolon', 'comma'] as const) {
+    await api.spreadsheets.values.update({
+      spreadsheetId,
+      range: probeCell,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: [[localizeValue(DIALECT_PROBE, dialect)]] as never },
+    })
+
+    const read = await api.spreadsheets.values.get({ spreadsheetId, range: probeCell })
+    if (String(read.data.values?.[0]?.[0] ?? '') === DIALECT_PROBE_EXPECTED) {
+      await api.spreadsheets.values.clear({ spreadsheetId, range: probeCell, requestBody: {} })
+      return { dialect, probed: true }
+    }
+  }
+
+  await api.spreadsheets.values.clear({ spreadsheetId, range: probeCell, requestBody: {} })
+  throw new Error(
+    'A planilha rejeitou a fórmula-sonda nos dois dialetos (`;` e `,`). Isso indica que ela ' +
+      'espera nomes de função localizados (SE em vez de IF). Mude o locale da planilha para ' +
+      'português (Brasil) ou inglês em Arquivo → Configurações e rode de novo.',
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Instalador
 // ---------------------------------------------------------------------------
 
@@ -341,8 +311,7 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
   }
 
   // --- 1. Locale ----------------------------------------------------------
-  // Precisa vir ANTES de qualquer fórmula: é o locale que decide se o Sheets
-  // lê `;` ou `,` como separador de argumentos.
+  // Precisa vir ANTES de qualquer fórmula: é ele que decide o dialeto.
   const setupRequests: sheets_v4.Schema$Request[] = []
   if (meta.properties?.locale !== SPREADSHEET_LOCALE) {
     setupRequests.push({
@@ -351,7 +320,7 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
         fields: 'locale,timeZone',
       },
     })
-    actions.push(`Locale ajustado para ${SPREADSHEET_LOCALE} (define o separador das fórmulas)`)
+    actions.push(`Locale ajustado para ${SPREADSHEET_LOCALE}`)
   }
 
   // --- 2. Abas faltantes --------------------------------------------------
@@ -388,7 +357,13 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
   }
   const sheetId = (title: string) => sheetsByTitle.get(title)?.properties?.sheetId ?? null
 
-  // --- 3. Conteúdo --------------------------------------------------------
+  // --- 3. Dialeto ---------------------------------------------------------
+  const { dialect } = await detectDialect(context, ref(SHEET.config, 'Z1'))
+  actions.push(
+    `Dialeto de fórmula detectado: separador "${dialect === 'semicolon' ? ';' : ','}"`,
+  )
+
+  // --- 4. Conteúdo --------------------------------------------------------
   const valueRanges: ValueRange[] = [
     ...DATA_SHEETS.map(dataSheetHeader),
     ...VIEW_SHEETS.flatMap(viewSheetContent),
@@ -436,7 +411,12 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
       requestBody: {
         // USER_ENTERED faz o Sheets interpretar as fórmulas em vez de gravar texto.
         valueInputOption: 'USER_ENTERED',
-        data: valueRanges.map((entry) => ({ range: entry.range, values: entry.values as never })),
+        data: valueRanges.map((entry) => ({
+          range: entry.range,
+          values: entry.values.map((row) =>
+            row.map((cell) => localizeValue(cell, dialect)),
+          ) as never,
+        })),
       },
     })
   } catch (error) {
@@ -444,121 +424,11 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
   }
   actions.push(`Fórmulas e cabeçalhos escritos (${valueRanges.length} intervalos)`)
 
-  // --- 4. Formatação, intervalos nomeados e gráficos ----------------------
-  const formatRequests: sheets_v4.Schema$Request[] = []
+  // --- 5. Intervalos nomeados, gráficos e ordem ---------------------------
+  const structureRequests: sheets_v4.Schema$Request[] = []
 
-  for (const spec of DATA_SHEETS) {
-    const id = sheetId(spec.title)
-    if (id === null) continue
-    formatRequests.push(headerStyleRequest(id, 1, spec.columns.length))
-    formatRequests.push(...widthRequests(id, spec.columns.map((column) => column.width)))
-    for (const [index, column] of spec.columns.entries()) {
-      const request = column.format ? numberFormatRequest(id, index, 2, column.format) : null
-      if (request) formatRequests.push(request)
-    }
-  }
-
-  for (const spec of VIEW_SHEETS) {
-    const id = sheetId(spec.title)
-    if (id === null) continue
-    formatRequests.push(headerStyleRequest(id, 2, spec.columns.length))
-    formatRequests.push(...widthRequests(id, spec.columns.map((column) => column.width)))
-    formatRequests.push({
-      repeatCell: {
-        range: { sheetId: id, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 1 },
-        cell: { userEnteredFormat: { textFormat: { bold: true, fontSize: 13 } } },
-        fields: 'userEnteredFormat.textFormat',
-      },
-    })
-    for (const [index, column] of spec.columns.entries()) {
-      // `native` vira R$ ou US$ conforme a moeda da classe da aba.
-      const format: ColumnFormat | undefined =
-        column.format === 'native'
-          ? CLASS_CURRENCY[spec.assetClass] === 'USD'
-            ? 'usd'
-            : 'brl'
-          : column.format
-      const request = format ? numberFormatRequest(id, index, VIEW_FIRST_ROW, format) : null
-      if (request) formatRequests.push(request)
-    }
-
-    // Ganho em verde, perda em vermelho. Só na primeira instalação: recriar as
-    // regras a cada rodada empilharia duplicatas na planilha.
-    if ((sheetsByTitle.get(spec.title)?.conditionalFormats ?? []).length === 0) {
-      for (const header of ['Rendimento', 'Rendimento %', 'Rendimento (R$)']) {
-        const column = spec.columns.findIndex((candidate) => candidate.header === header)
-        if (column < 0) continue
-        formatRequests.push(...returnColorRules(id, column))
-      }
-    }
-
-    // O total da aba mora na linha 1 e é sempre em reais, mesmo nas classes
-    // cotadas em dólar — é ele que o Painel soma.
-    formatRequests.push({
-      repeatCell: {
-        range: {
-          sheetId: id,
-          startRowIndex: 0,
-          endRowIndex: 1,
-          startColumnIndex: spec.totalColumn,
-          endColumnIndex: spec.totalColumn + 1,
-        },
-        cell: { userEnteredFormat: { numberFormat: NUMBER_FORMAT.brl!, textFormat: { bold: true } } },
-        fields: 'userEnteredFormat(numberFormat,textFormat)',
-      },
-    })
-  }
-
-  const dashboardId = sheetId(DASHBOARD.title)
-  if (dashboardId !== null) {
-    formatRequests.push(headerStyleRequest(dashboardId, DASHBOARD.allocationHeaderRow, 5))
-    formatRequests.push({
-      repeatCell: {
-        range: { sheetId: dashboardId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 1 },
-        cell: { userEnteredFormat: { textFormat: { bold: true, fontSize: 16 } } },
-        fields: 'userEnteredFormat.textFormat',
-      },
-    })
-    formatRequests.push(...widthRequests(dashboardId, [200, 150, 110, 110, 110]))
-
-    const firstRow = DASHBOARD.allocationFirstRow
-    const lastRow = firstRow + ASSET_CLASSES.length
-    const money = NUMBER_FORMAT.brl!
-    const percent = NUMBER_FORMAT.percent!
-    formatRequests.push(
-      {
-        repeatCell: {
-          range: { sheetId: dashboardId, startRowIndex: firstRow - 1, endRowIndex: lastRow - 1, startColumnIndex: 1, endColumnIndex: 2 },
-          cell: { userEnteredFormat: { numberFormat: money } },
-          fields: 'userEnteredFormat.numberFormat',
-        },
-      },
-      {
-        repeatCell: {
-          range: { sheetId: dashboardId, startRowIndex: firstRow - 1, endRowIndex: lastRow - 1, startColumnIndex: 2, endColumnIndex: 5 },
-          cell: { userEnteredFormat: { numberFormat: percent } },
-          fields: 'userEnteredFormat.numberFormat',
-        },
-      },
-      {
-        repeatCell: {
-          range: { sheetId: dashboardId, startRowIndex: DASHBOARD.totalRow - 1, endRowIndex: DASHBOARD.totalRow, startColumnIndex: 1, endColumnIndex: 2 },
-          cell: { userEnteredFormat: { numberFormat: money, textFormat: { bold: true, fontSize: 13 } } },
-          fields: 'userEnteredFormat(numberFormat,textFormat)',
-        },
-      },
-      {
-        repeatCell: {
-          range: { sheetId: dashboardId, startRowIndex: DASHBOARD.updatedRow - 1, endRowIndex: DASHBOARD.updatedRow, startColumnIndex: 1, endColumnIndex: 2 },
-          cell: { userEnteredFormat: { numberFormat: NUMBER_FORMAT.datetime! } },
-          fields: 'userEnteredFormat.numberFormat',
-        },
-      },
-    )
-  }
-
-  // Intervalos nomeados: o Painel referencia os totais por nome, não por célula,
-  // para que mexer no layout de uma aba de classe não quebre o painel.
+  // O Painel referencia os totais por NOME, não por célula: mexer no layout de
+  // uma aba de classe não quebra o painel.
   const existingNamed = new Map<string, string>()
   for (const named of fresh.namedRanges ?? []) {
     if (named.name && named.namedRangeId) existingNamed.set(named.name, named.namedRangeId)
@@ -587,32 +457,34 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
     }
     const existingId = existingNamed.get(target.name)
     if (existingId) {
-      formatRequests.push({
-        updateNamedRange: { namedRange: { namedRangeId: existingId, name: target.name, range }, fields: 'range' },
+      structureRequests.push({
+        updateNamedRange: {
+          namedRange: { namedRangeId: existingId, name: target.name, range },
+          fields: 'range',
+        },
       })
     } else {
-      formatRequests.push({ addNamedRange: { namedRange: { name: target.name, range } } })
+      structureRequests.push({ addNamedRange: { namedRange: { name: target.name, range } } })
       actions.push(`Intervalo nomeado criado: ${target.name}`)
     }
   }
 
-  // Gráficos: só na primeira vez. Recriar a cada instalação apagaria qualquer
-  // ajuste de posição ou cor que você tivesse feito.
+  // Gráficos: só na primeira vez. Recriar apagaria ajustes manuais.
   const dashboardCharts = sheetsByTitle.get(DASHBOARD.title)?.charts ?? []
+  const dashboardId = sheetId(DASHBOARD.title)
   const historyId = sheetId(SHEET.history)
   if (dashboardCharts.length === 0 && dashboardId !== null && historyId !== null) {
-    formatRequests.push(...chartRequests(dashboardId, historyId))
+    structureRequests.push(...chartRequests(dashboardId, historyId))
     actions.push('Gráficos criados: pizza de alocação e linha do patrimônio')
   } else if (dashboardCharts.length > 0) {
     actions.push(`Gráficos preservados (${dashboardCharts.length} já existiam)`)
   }
 
-  // Ordem das abas.
   for (const [index, title] of order.entries()) {
     const id = sheetId(title)
     const current = sheetsByTitle.get(title)?.properties?.index
     if (id === null || current === index) continue
-    formatRequests.push({
+    structureRequests.push({
       updateSheetProperties: { properties: { sheetId: id, index }, fields: 'index' },
     })
   }
@@ -624,21 +496,27 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
     if (!DEFAULT_SHEET_TITLES.has(title) || id === null || id === undefined) continue
     const used = await api.spreadsheets.values.get({ spreadsheetId, range: ref(title, 'A1:Z50') })
     if ((used.data.values ?? []).length === 0) {
-      formatRequests.push({ deleteSheet: { sheetId: id } })
+      structureRequests.push({ deleteSheet: { sheetId: id } })
       actions.push(`Aba padrão vazia removida: ${title}`)
     } else {
       warnings.push(`A aba "${title}" tem conteúdo e foi mantida. Apague à mão se não precisar dela.`)
     }
   }
 
-  if (formatRequests.length > 0) {
+  if (structureRequests.length > 0) {
     try {
-      await api.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests: formatRequests } })
+      await api.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: { requests: structureRequests },
+      })
     } catch (error) {
       throw new Error(explainSheetsError(error, context))
     }
-    actions.push('Formatação, intervalos nomeados e ordem das abas aplicados')
   }
+
+  // --- 6. Aparência -------------------------------------------------------
+  const style = await applyStyling(context)
+  actions.push(...style.actions)
 
   return {
     actions,

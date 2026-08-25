@@ -77,6 +77,15 @@ async function main() {
   const valueRanges = response.data.valueRanges ?? []
   const bySymbol = new Map<string, Position>(positions.map((p) => [p.symbol, p]))
 
+  // Total por classe, para conferir a coluna "% da classe" das abas.
+  const classTotals = new Map<string, number>()
+  for (const position of positions) {
+    classTotals.set(
+      position.assetClass,
+      (classTotals.get(position.assetClass) ?? 0) + position.marketValueBRL,
+    )
+  }
+
   VIEW_SHEETS.forEach((spec, index) => {
     const rows = (valueRanges[index]?.values ?? []) as unknown[][]
     const headers = spec.columns.map((column) => column.header)
@@ -86,6 +95,8 @@ async function main() {
     const quantityColumn = headerIndex(headers, 'Posição')
     const avgColumn = headerIndex(headers, 'Preço médio')
     const appliedColumn = headerIndex(headers, 'Aplicado (R$)')
+    const shareColumn = headerIndex(headers, '% da classe')
+    const classTotal = classTotals.get(spec.assetClass) ?? 0
 
     const listed = rows.filter((row) => String(row[symbolColumn] ?? '').trim() !== '')
 
@@ -137,6 +148,20 @@ async function main() {
       }
       if (appliedColumn >= 0) {
         compare(label, 'aplicado (R$)', parseNumber(row[appliedColumn]), position.totalCostBRL)
+      }
+      if (shareColumn >= 0 && classTotal > 0) {
+        // Participação na PRÓPRIA classe. Tolerância em pontos percentuais:
+        // um centavo de diferença num total pequeno vira muita porcentagem.
+        const expected = position.marketValueBRL / classTotal
+        const found = parseNumber(row[shareColumn])
+        if (Math.abs(found - expected) > 0.0001) {
+          divergences.push({
+            where: label,
+            what: '% da classe',
+            sheet: found,
+            code: expected,
+          })
+        }
       }
     }
   })
