@@ -148,7 +148,17 @@ export const NUMBER_FORMAT: Record<ColumnFormat, { type: string; pattern: string
   boolean: null,
   date: { type: 'DATE', pattern: 'dd/mm/yyyy' },
   datetime: { type: 'DATE_TIME', pattern: 'dd/mm/yyyy hh:mm' },
-  quantity: { type: 'NUMBER', pattern: '#,##0.########' },
+  /**
+   * Quantidade usa o formato automático, e não um padrão com casas opcionais.
+   *
+   * Motivo medido na planilha: o Sheets imprime o separador decimal sempre que
+   * o padrão tem QUALQUER `#` depois da vírgula — `#,##0.########` mostra 69
+   * como "69,", com a vírgula solta parecendo defeito. `General` dá "69" para
+   * inteiro e "1,75" para fracionário, que é o que se quer numa coluna que
+   * precisa aguentar ação fracionária. O preço é perder o separador de milhar,
+   * irrelevante para quantidade de ativo.
+   */
+  quantity: { type: 'NUMBER', pattern: 'General' },
   price: { type: 'NUMBER', pattern: '#,##0.0000' },
   brl: { type: 'CURRENCY', pattern: '"R$" #,##0.00' },
   usd: { type: 'CURRENCY', pattern: '"US$" #,##0.00' },
