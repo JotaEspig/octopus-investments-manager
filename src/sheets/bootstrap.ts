@@ -27,6 +27,7 @@ import {
 } from './schema'
 import { explainSheetsError, type SheetsContext } from './client'
 import { applyStyling } from './styling'
+import { BLOCKED_BY_MIGRATION, planMigrations, runMigrations } from './migrations'
 
 /**
  * Instalador da planilha — a ESTRUTURA.
@@ -357,13 +358,27 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
   }
   const sheetId = (title: string) => sheetsByTitle.get(title)?.properties?.sheetId ?? null
 
-  // --- 3. Dialeto ---------------------------------------------------------
+  // --- 3. Migrações pendentes ---------------------------------------------
+  //
+  // Antes de reescrever qualquer cabeçalho: se uma versão anterior organizava
+  // os dados de outro jeito, escrever o cabeçalho novo por cima das linhas
+  // antigas as desalinharia em silêncio. Migração destrutiva exige o comando
+  // dedicado, que faz backup e pede confirmação.
+  const plan = await planMigrations(context)
+  if (plan.touchesData) throw new Error(BLOCKED_BY_MIGRATION)
+
+  if (plan.pending.length > 0) {
+    const migrated = await runMigrations(context, { backup: false })
+    actions.push(`Migrado da v${migrated.from} para a v${migrated.to}`)
+  }
+
+  // --- 4. Dialeto ---------------------------------------------------------
   const { dialect } = await detectDialect(context, ref(SHEET.config, 'Z1'))
   actions.push(
     `Dialeto de fórmula detectado: separador "${dialect === 'semicolon' ? ';' : ','}"`,
   )
 
-  // --- 4. Conteúdo --------------------------------------------------------
+  // --- 5. Conteúdo --------------------------------------------------------
   const valueRanges: ValueRange[] = [
     ...DATA_SHEETS.map(dataSheetHeader),
     ...VIEW_SHEETS.flatMap(viewSheetContent),
@@ -424,7 +439,7 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
   }
   actions.push(`Fórmulas e cabeçalhos escritos (${valueRanges.length} intervalos)`)
 
-  // --- 5. Intervalos nomeados, gráficos e ordem ---------------------------
+  // --- 6. Intervalos nomeados, gráficos e ordem ---------------------------
   const structureRequests: sheets_v4.Schema$Request[] = []
 
   // O Painel referencia os totais por NOME, não por célula: mexer no layout de
@@ -514,7 +529,7 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
     }
   }
 
-  // --- 6. Aparência -------------------------------------------------------
+  // --- 7. Aparência -------------------------------------------------------
   const style = await applyStyling(context)
   actions.push(...style.actions)
 

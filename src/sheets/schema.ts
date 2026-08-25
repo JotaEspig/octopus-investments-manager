@@ -6,7 +6,8 @@
  * planilha a partir deste arquivo e os repositórios leem/escrevem por estas
  * definições — nenhum outro módulo pode conter um "A2:J" solto.
  *
- * Mudou uma coluna de lugar? Suba `SCHEMA_VERSION` e rode `npm run sheet:install`.
+ * Mudou uma coluna de lugar? Suba `SCHEMA_VERSION` E registre a migração em
+ * `migrations.ts` — o instalador se recusa a passar por cima de dados gravados.
  */
 
 import { ASSET_CLASSES, ASSET_CLASS_LABELS, type AssetClass, type Currency } from '@/domain/types'

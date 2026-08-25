@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "sheet:install": "tsx scripts/sheet-install.ts",
     "sheet:style": "tsx scripts/sheet-style.ts",
+    "sheet:migrate": "tsx scripts/sheet-migrate.ts",
     "sheet:reset": "tsx scripts/sheet-reset.ts",
     "verify:sheet": "tsx scripts/verify-sheet.ts",
     "mcp": "tsx mcp/server.ts"

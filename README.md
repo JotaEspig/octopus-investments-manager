@@ -95,6 +95,7 @@ médio e imposto em silêncio.
 | `npm run dev` | Interface em `127.0.0.1:3000` |
 | `npm run sheet:install` | Constrói/atualiza a estrutura da planilha (idempotente) |
 | `npm run sheet:style` | Repinta a planilha. Só aparência — não lê nem escreve valor nenhum |
+| `npm run sheet:migrate` | Sobe a planilha de versão. `--dry-run` só mostra o plano |
 | `npm run sheet:reset` | **Apaga tudo.** Pede confirmação digitando o nome da planilha |
 | `npm run verify:sheet` | Compara as posições calculadas em TS com as fórmulas da planilha |
 | `npm test` | Testes do domínio (puros, sem rede) |
@@ -114,6 +115,50 @@ voltar ao padrão se você mexeu no visual à mão.
 
 O `sheet:install` já chama a estilização no fim; este comando existe para
 repintar sem reinstalar.
+
+### Versões do schema
+
+A planilha guarda a versão em `Config!schema_version` e o código declara a que
+espera em `SCHEMA_VERSION`. Quando divergem, há dois caminhos — e **nenhum
+deles é resetar**. O reset existe para recomeçar do zero por vontade própria,
+não para contornar uma atualização.
+
+**Mudança aditiva** — coluna nova numa aba de apresentação, aba nova, chave
+nova em `Config`. O `sheet:install` absorve sozinho: ele reescreve as abas de
+apresentação inteiras e nunca encosta em linha de dados. Foi assim que a v2
+entrou.
+
+```bash
+npm run sheet:install
+```
+
+**Mudança que transforma dados** — coluna inserida no meio de `Operações`, aba
+renomeada, valor que muda de formato. Aí o `sheet:install` **se recusa a
+rodar**, porque escrever o cabeçalho novo por cima das linhas antigas as
+desalinharia em silêncio. O caminho é:
+
+```bash
+npm run sheet:migrate --dry-run   # o que viria pela frente
+npm run sheet:migrate             # aplica, com backup e confirmação
+npm run sheet:install             # reconstrói as abas de apresentação
+npm run verify:sheet              # confere que planilha e código batem
+```
+
+Antes de transformar qualquer coisa, as sete abas de dados são **duplicadas e
+ocultadas** dentro da própria planilha (`_bkp_v2_Operações` e companhia). Se
+algo sair errado, a recuperação é apagar a aba quebrada e renomear a cópia de
+volta. Confira o resultado antes de apagar os backups — o `sheet:migrate` os
+lista quando não há nada pendente.
+
+Cada versão tem uma entrada em `src/sheets/migrations.ts`, mesmo as aditivas:
+sem isso não daria para dizer, olhando só o registro, o que aconteceu entre
+duas versões. Um teste falha se alguém subir `SCHEMA_VERSION` sem registrar a
+migração correspondente.
+
+O módulo já traz as primitivas para as mudanças destrutivas típicas —
+`insertColumn`, `deleteColumn`, `moveColumn`, `renameSheet`, `transformColumn`
+— para que a primeira delas seja escrita em três linhas, e não improvisada com
+a planilha de alguém no meio.
 
 ### `sheet:reset`
 
