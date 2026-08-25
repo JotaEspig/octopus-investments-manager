@@ -5,6 +5,51 @@ import { Card, Shell } from '@/components/shell'
 import type { BootstrapReport } from '@/sheets/bootstrap'
 import type { Check, Diagnosis } from '@/sheets/diagnose'
 
+/**
+ * O único passo que a service account não consegue automatizar.
+ *
+ * Um script vinculado à planilha pertence a você, não a ela, então a API do
+ * Google não pode criá-lo — e a API do Apps Script não cria gatilhos de tempo,
+ * só código rodando dentro do próprio script. Daí os dois cliques manuais.
+ */
+function AppsScriptCard() {
+  const [copied, setCopied] = useState(false)
+
+  async function copy() {
+    const response = await fetch('/api/sheet/apps-script')
+    if (!response.ok) return
+    await navigator.clipboard.writeText(await response.text())
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2500)
+  }
+
+  return (
+    <Card
+      title="Motor da planilha (Apps Script)"
+      description="Sem este passo a planilha não sabe precificar renda fixa nem guardar o histórico do patrimônio — e o gráfico de 12 meses fica vazio."
+    >
+      <ol className="flex list-decimal flex-col gap-2 pl-5 text-sm text-ink-muted">
+        <li>Na planilha, abra <strong>Extensões → Apps Script</strong>.</li>
+        <li>Substitua todo o conteúdo do <code>Code.gs</code> pelo código copiado abaixo e salve.</li>
+        <li>Recarregue a planilha — aparece o menu <strong>Carteira</strong>.</li>
+        <li>
+          Clique em <strong>Carteira → Ativar atualização diária</strong> e autorize. A partir daí
+          roda sozinho todo dia, na nuvem do Google, com esta interface desligada.
+        </li>
+      </ol>
+      <div className="mt-4">
+        <button
+          type="button"
+          onClick={() => void copy()}
+          className="rounded-md border border-border px-4 py-2 text-sm transition-colors hover:text-ink"
+        >
+          {copied ? '✓ Copiado' : 'Copiar Code.gs'}
+        </button>
+      </div>
+    </Card>
+  )
+}
+
 const STATUS_MARK: Record<Check['status'], { icon: string; className: string }> = {
   ok: { icon: '✓', className: 'text-positive' },
   warn: { icon: '!', className: 'text-ink-muted' },
@@ -105,6 +150,8 @@ export default function SetupPage() {
           </span>
         </div>
       </Card>
+
+      <AppsScriptCard />
 
       {error ? (
         <Card title="Erro">

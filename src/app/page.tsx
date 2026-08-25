@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { Card, Shell } from '@/components/shell'
-import { TradeForm } from '@/components/trade-form'
+import { TradeForm, type ContractOption } from '@/components/trade-form'
 import { TRADE_KIND_LABELS, type Asset, type Trade } from '@/domain/types'
 
 /**
@@ -15,11 +15,13 @@ import { TRADE_KIND_LABELS, type Asset, type Trade } from '@/domain/types'
 
 interface AssetsResponse {
   assets: Asset[]
+  contracts: ContractOption[]
   spreadsheetUrl: string
 }
 
 export default function HomePage() {
   const [assets, setAssets] = useState<Asset[]>([])
+  const [contracts, setContracts] = useState<ContractOption[]>([])
   const [trades, setTrades] = useState<Trade[]>([])
   const [spreadsheetUrl, setSpreadsheetUrl] = useState<string | null>(null)
   const [setupNeeded, setSetupNeeded] = useState<string | null>(null)
@@ -38,9 +40,10 @@ export default function HomePage() {
         return
       }
 
-      const { assets: list, spreadsheetUrl: url } = assetsBody as AssetsResponse
-      setAssets(list)
-      setSpreadsheetUrl(url)
+      const body = assetsBody as AssetsResponse
+      setAssets(body.assets)
+      setContracts(body.contracts)
+      setSpreadsheetUrl(body.spreadsheetUrl)
       setSetupNeeded(null)
 
       if (tradesResponse.ok) {
@@ -83,7 +86,7 @@ export default function HomePage() {
         {loading ? (
           <p className="text-sm text-ink-muted">Carregando…</p>
         ) : (
-          <TradeForm assets={assets} onSubmitted={() => void refresh()} />
+          <TradeForm assets={assets} contracts={contracts} onSubmitted={() => void refresh()} />
         )}
       </Card>
 
