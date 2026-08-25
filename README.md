@@ -116,6 +116,49 @@ voltar ao padrão se você mexeu no visual à mão.
 O `sheet:install` já chama a estilização no fim; este comando existe para
 repintar sem reinstalar.
 
+## Exportar
+
+Botão **Exportar** na interface, ou direto na API:
+
+```
+GET /api/export                       # JSON completo
+GET /api/export?format=csv&sheet=X    # uma aba em CSV
+GET /api/export?format=list           # nomes das abas
+```
+
+O JSON traz todas as abas, a carteira calculada, a deriva estrutural e um
+checksum. O CSV é por aba, porque um CSV não comporta várias tabelas sem virar
+um formato inventado.
+
+**Fidelidade acima de conveniência.** O dump usa o cabeçalho **real** de cada
+aba e a largura **real** da grade, lidos da planilha — não a expectativa do
+`schema.ts`. Coluna que você acrescentou à mão aparece; coluna que o schema
+espera e a planilha não tem, não é inventada. Cabeçalho vazio vira `Coluna C`
+(a letra real) e cabeçalho repetido ganha sufixo, em vez de sobrescrever.
+
+**Falha parcial não derruba o todo.** Cada aba é lida em isolamento; uma aba
+ilegível vira uma entrada com `error` e o resto sai completo. Se o cálculo da
+carteira falhar, `portfolio` vem `null` e os dados brutos continuam lá — um
+backup que só funciona quando está tudo bem não é backup.
+
+**Segurança.** O CSV neutraliza injeção de fórmula: um campo de texto começando
+com `=`, `+`, `-` ou `@` viraria fórmula ativa ao abrir no Excel, então recebe
+um apóstrofo. Número negativo não é afetado — a defesa só vale para texto. O
+arquivo também leva BOM, sem o qual o Excel abre UTF-8 como Latin-1 e
+"Observação" vira "ObservaÃ§Ã£o".
+
+Nada de credencial vai no arquivo: nem caminho de chave, nem e-mail da service
+account. Só o que está dentro da planilha.
+
+**O checksum é verificável por qualquer um.** É `sha256` da serialização
+canônica do bloco `sheets` (chaves em ordem alfabética, sem espaços), e a
+receita vai gravada em `integrity.algorithm`. Não é assinatura — quem editar o
+arquivo de propósito recalcula. Detecta acidente: download truncado, edição
+sem querer.
+
+Fórmulas não são exportadas, só os valores que produziram. Elas são
+reproduzíveis com `sheet:install`; os dados é que são insubstituíveis.
+
 ### Versões do schema
 
 A planilha guarda a versão em `Config!schema_version` e o código declara a que

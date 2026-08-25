@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { ExportPanel } from '@/components/export-panel'
 import { Card, Shell } from '@/components/shell'
 import { TradeForm, type ContractOption } from '@/components/trade-form'
 import { TRADE_KIND_LABELS, type Asset, type Trade } from '@/domain/types'
@@ -24,6 +25,7 @@ export default function HomePage() {
   const [contracts, setContracts] = useState<ContractOption[]>([])
   const [trades, setTrades] = useState<Trade[]>([])
   const [spreadsheetUrl, setSpreadsheetUrl] = useState<string | null>(null)
+  const [exportableSheets, setExportableSheets] = useState<string[]>([])
   const [setupNeeded, setSetupNeeded] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -49,6 +51,18 @@ export default function HomePage() {
       if (tradesResponse.ok) {
         const body = (await tradesResponse.json()) as { trades: Trade[] }
         setTrades(body.trades)
+      }
+
+      // A lista de abas vem da planilha, não do schema — e falhar aqui não
+      // pode derrubar a tela: sem ela, só some o seletor de CSV.
+      try {
+        const response = await fetch('/api/export?format=list')
+        if (response.ok) {
+          const body = (await response.json()) as { sheets: string[] }
+          setExportableSheets(body.sheets)
+        }
+      } catch {
+        setExportableSheets([])
       }
     } catch (error) {
       setSetupNeeded(error instanceof Error ? error.message : String(error))
@@ -121,6 +135,13 @@ export default function HomePage() {
             ))}
           </ul>
         )}
+      </Card>
+
+      <Card
+        title="Exportar"
+        description="Um arquivo com o que a planilha tem hoje — cabeçalho real, nada inventado. Serve de backup fora do Google e de porta de saída para outra ferramenta."
+      >
+        <ExportPanel sheets={exportableSheets} />
       </Card>
     </Shell>
   )
