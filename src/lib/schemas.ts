@@ -1,0 +1,103 @@
+import { z } from 'zod'
+import {
+  ASSET_CLASSES,
+  CURRENCIES,
+  FIXED_INCOME_INDEXERS,
+  TRADE_KINDS,
+} from '@/domain/types'
+
+/**
+ * Validação compartilhada entre o formulário e a API.
+ *
+ * O mesmo schema roda nos dois lados de propósito: a interface não é uma
+ * camada de conveniência sobre uma API permissiva — o que o formulário recusa,
+ * a rota também recusa, e uma chamada direta por curl não consegue gravar
+ * lixo na planilha.
+ */
+
+const isoDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Data deve estar no formato aaaa-mm-dd')
+
+/** Tickers são maiúsculos, sem espaço; ids de renda fixa aceitam hífen. */
+const symbol = z
+  .string()
+  .trim()
+  .min(1, 'Informe o ativo')
+  .max(40)
+  .transform((value) => value.toUpperCase())
+
+export const tradeInputSchema = z
+  .object({
+    date: isoDate,
+    kind: z.enum(TRADE_KINDS),
+    symbol,
+    quantity: z.number().positive('Quantidade deve ser maior que zero'),
+    unitPrice: z.number().nonnegative('Preço não pode ser negativo'),
+    currency: z.enum(CURRENCIES),
+    fees: z.number().nonnegative().default(0),
+    fxRate: z.number().positive('Câmbio deve ser maior que zero'),
+    note: z.string().trim().max(200).default(''),
+  })
+  .refine((trade) => trade.currency !== 'BRL' || trade.fxRate === 1, {
+    message: 'Operação em BRL deve ter câmbio 1',
+    path: ['fxRate'],
+  })
+
+export type TradeInput = z.infer<typeof tradeInputSchema>
+
+export const assetInputSchema = z.object({
+  symbol,
+  name: z.string().trim().min(1, 'Informe o nome do ativo').max(120),
+  assetClass: z.enum(ASSET_CLASSES),
+  currency: z.enum(CURRENCIES),
+  broker: z.string().trim().max(60).default(''),
+})
+
+export type AssetInput = z.infer<typeof assetInputSchema>
+
+export const fixedIncomeInputSchema = z
+  .object({
+    symbol,
+    name: z.string().trim().min(1, 'Informe o nome do papel').max(120),
+    issuer: z.string().trim().min(1, 'Informe o emissor').max(80),
+    indexer: z.enum(FIXED_INCOME_INDEXERS),
+    /**
+     * Fração, não porcentagem. `1.1` é 110% do CDI; `0.13` é 13% a.a. no
+     * prefixado; `0.06` é IPCA + 6% a.a.
+     */
+    rate: z.number().positive('Taxa deve ser maior que zero'),
+    issueDate: isoDate,
+    maturity: isoDate,
+    dailyLiquidity: z.boolean().default(false),
+    fgc: z.boolean().default(false),
+  })
+  .refine((contract) => contract.maturity > contract.issueDate, {
+    message: 'Vencimento deve ser depois da aplicação',
+    path: ['maturity'],
+  })
+
+export type FixedIncomeInput = z.infer<typeof fixedIncomeInputSchema>
+
+/**
+ * Corpo do POST /api/trades. Um ativo novo pode vir junto da primeira
+ * operação — é o caminho normal: você compra algo que ainda não está
+ * cadastrado e não deveria precisar de dois passos para isso.
+ */
+export const createTradeSchema = z.object({
+  trade: tradeInputSchema,
+  newAsset: assetInputSchema.optional(),
+  newContract: fixedIncomeInputSchema.optional(),
+})
+
+export type CreateTradeBody = z.infer<typeof createTradeSchema>
+
+/** Traduz o erro do zod para `{ campo: mensagem }`, que é o que o formulário exibe. */
+export function fieldErrors(error: z.ZodError): Record<string, string> {
+  const result: Record<string, string> = {}
+  for (const issue of error.issues) {
+    const path = issue.path.join('.')
+    if (!result[path]) result[path] = issue.message
+  }
+  return result
+}
