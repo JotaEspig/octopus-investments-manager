@@ -19,12 +19,27 @@ const isoDate = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Data deve estar no formato aaaa-mm-dd')
 
-/** Tickers são maiúsculos, sem espaço; ids de renda fixa aceitam hífen. */
+/**
+ * Ticker ou id de contrato.
+ *
+ * Aqui uma lista de permitidos É a ferramenta certa, porque o campo tem forma
+ * conhecida: `AAPL`, `PETR4`, `BRK.B`, `RF-CDB-BANCO-XP-2028`. Um ticker com
+ * `=` não é um ticker digitado errado, é lixo. E este valor vira critério de
+ * busca nas fórmulas da planilha — caractere estranho aqui quebra o `SUMIFS`
+ * que monta a posição.
+ *
+ * Para texto livre (nome, emissor, observação) a resposta é outra: neutralizar
+ * na escrita, não bloquear. Ver `escapeSheetsFormula` em `sheets/repositories`.
+ */
 const symbol = z
   .string()
   .trim()
   .min(1, 'Informe o ativo')
   .max(40)
+  .regex(
+    /^[A-Za-z0-9][A-Za-z0-9.\-_]*$/,
+    'Use apenas letras, números, ponto, hífen e sublinhado',
+  )
   .transform((value) => value.toUpperCase())
 
 export const tradeInputSchema = z

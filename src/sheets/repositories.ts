@@ -210,14 +210,62 @@ async function nextRow(context: SheetsContext, spec: DataSheetSpec): Promise<num
   return (response.data.values?.length ?? 1) + 1
 }
 
+/**
+ * Fórmula que o CÓDIGO quer que seja fórmula.
+ *
+ * Existe para separar as duas intenções que passam pelo mesmo cano: a fórmula
+ * de cotação que precisa ser interpretada, e o texto do usuário que nunca deve
+ * ser. Sem essa marca explícita, ou o `GOOGLEFINANCE` viraria texto ou uma
+ * anotação viraria fórmula — e o segundo erro é o perigoso.
+ */
+class SheetFormula {
+  constructor(readonly text: string) {}
+}
+
+export const formula = (text: string) => new SheetFormula(text)
+
+/**
+ * Caracteres que fazem o Google Sheets interpretar a célula como FÓRMULA.
+ *
+ * Menos que no CSV de propósito: medido na planilha, o Sheets só dispara com
+ * `=` e `+`. `@` não é gatilho aqui e `-` apenas coage número — `-- ajuste
+ * manual` continua texto. Escapar a mais poluiria anotações legítimas.
+ */
+const SHEETS_FORMULA_TRIGGERS = ['=', '+']
+
+/**
+ * Neutraliza injeção de fórmula na ESCRITA.
+ *
+ * O apóstrofo é o marcador de "isto é texto" do Sheets: ele não faz parte do
+ * valor, some na exibição e a leitura devolve a string original. Verificado na
+ * planilha — `'=1+1` volta como `=1+1`, e não como `2`.
+ *
+ * Sem isto, gravar com `USER_ENTERED` faria uma anotação como
+ * `=HYPERLINK("http://x";"clique")` virar link ativo dentro do livro-razão.
+ */
+export function escapeSheetsFormula(value: unknown): unknown {
+  if (typeof value !== 'string') return value
+  return SHEETS_FORMULA_TRIGGERS.includes(value.charAt(0)) ? `'${value}` : value
+}
+
+/**
+ * `USER_ENTERED` é necessário para o Sheets reconhecer `25/08/2026` como data
+ * em vez de texto. O preço é que ele interpreta TUDO — por isso cada valor
+ * passa pelo neutralizador, e só o que veio marcado como `formula()` escapa
+ * dele.
+ */
 async function writeRow(context: SheetsContext, spec: DataSheetSpec, values: unknown[]) {
   const row = await nextRow(context, spec)
+  const safe = values.map((value) =>
+    value instanceof SheetFormula ? value.text : escapeSheetsFormula(value),
+  )
+
   try {
     await context.api.spreadsheets.values.update({
       spreadsheetId: context.spreadsheetId,
       range: writableRange(spec, row),
       valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [values] as never },
+      requestBody: { values: [safe] as never },
     })
   } catch (error) {
     throw new Error(explainSheetsError(error, context))
@@ -271,7 +319,8 @@ export async function appendAsset(context: SheetsContext, input: AssetInput): Pr
   ])
   await writeRow(context, QUOTES_SHEET, [
     input.symbol,
-    quoteFormula(input.symbol, input.assetClass),
+    // A única fórmula que este módulo grava de propósito.
+    formula(quoteFormula(input.symbol, input.assetClass)),
     input.currency,
   ])
   return input

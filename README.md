@@ -141,11 +141,8 @@ ilegível vira uma entrada com `error` e o resto sai completo. Se o cálculo da
 carteira falhar, `portfolio` vem `null` e os dados brutos continuam lá — um
 backup que só funciona quando está tudo bem não é backup.
 
-**Segurança.** O CSV neutraliza injeção de fórmula: um campo de texto começando
-com `=`, `+`, `-` ou `@` viraria fórmula ativa ao abrir no Excel, então recebe
-um apóstrofo. Número negativo não é afetado — a defesa só vale para texto. O
-arquivo também leva BOM, sem o qual o Excel abre UTF-8 como Latin-1 e
-"Observação" vira "ObservaÃ§Ã£o".
+**Segurança.** Ver *Injeção de fórmula* abaixo. O arquivo também leva BOM, sem
+o qual o Excel abre UTF-8 como Latin-1 e "Observação" vira "ObservaÃ§Ã£o".
 
 Nada de credencial vai no arquivo: nem caminho de chave, nem e-mail da service
 account. Só o que está dentro da planilha.
@@ -158,6 +155,36 @@ sem querer.
 
 Fórmulas não são exportadas, só os valores que produziram. Elas são
 reproduzíveis com `sheet:install`; os dados é que são insubstituíveis.
+
+## Injeção de fórmula
+
+Texto que começa com `=` é interpretado como fórmula em dois lugares
+diferentes, e cada um exigiu uma defesa própria.
+
+**Na escrita, no Google Sheets.** Gravar com `USER_ENTERED` — necessário para o
+Sheets reconhecer `25/08/2026` como data — faz ele interpretar tudo. Uma
+anotação como `=HYPERLINK("http://x";"clique")` viraria link ativo dentro do
+livro-razão, e a leitura seguinte devolveria `clique` em vez do que foi
+escrito. É o caso mais grave, porque estraga a fonte de verdade.
+
+**Na leitura, no Excel.** O mesmo texto num CSV vira fórmula ativa na máquina
+de quem abrir o arquivo.
+
+Nos dois casos a defesa é **neutralizar, não bloquear**: o valor recebe um
+apóstrofo, que é marcador de "isto é texto" e não faz parte do conteúdo — a
+leitura devolve a string original. Bloquear rejeitaria uma anotação legítima
+sem ganhar segurança nenhuma.
+
+Os gatilhos são diferentes de propósito, medidos em cada destino: o Sheets só
+dispara com `=` e `+`; o Excel também com `-` e `@`. Escapar a mais poluiria
+anotações como `-- ajuste manual`. Em ambos, **número nunca é afetado** — a
+defesa só vale para texto, senão `-1234,56` sairia corrompido.
+
+A exceção é o **ticker**, onde uma lista de permitidos é a ferramenta certa: o
+campo tem forma conhecida (`AAPL`, `PETR4`, `BRK.B`, `RF-CDB-BANCO-XP-2028`) e
+vira critério de busca nas fórmulas da planilha, então caractere estranho ali
+quebra o `SUMIFS` que monta a posição. Nome, emissor e observação seguem
+livres.
 
 ### Versões do schema
 
