@@ -47,10 +47,11 @@ carregando a média.
 - `*Native` — desempenho na moeda do ativo. Diz se **o ativo** foi bem.
 - `*BRL` — resultado em reais, câmbio incluído. Diz se **o investidor** ganhou.
 
-Para a carteira dele (AAPL, MSFT, GOOGL, PG e ETFs, tudo via Avenue) a
-diferença costuma ser grande. Ao comentar desempenho, **diga qual das duas você
-está usando**. Um ativo pode estar 5% negativo em dólar e positivo em reais
-porque o câmbio subiu — e o contrário também acontece.
+Para posições em dólar a diferença costuma ser grande. Ao comentar desempenho,
+**diga qual das duas você está usando**. Um ativo pode estar 5% negativo em
+dólar e positivo em reais porque o câmbio subiu — e o contrário também
+acontece. Consulte `portfolio_positions` para saber quais classes a carteira
+tem de fato, em vez de presumir.
 
 O custo em reais usa o câmbio de **cada compra**, não o de hoje. É o que foi
 efetivamente desembolsado.
