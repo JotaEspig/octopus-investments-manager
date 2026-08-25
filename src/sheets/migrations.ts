@@ -251,6 +251,111 @@ export async function listBackups(context: SheetsContext): Promise<string[]> {
 }
 
 // ---------------------------------------------------------------------------
+// Deriva estrutural
+// ---------------------------------------------------------------------------
+
+export type HeaderDrift =
+  | { kind: 'empty' }
+  | { kind: 'identical' }
+  | { kind: 'additive'; added: string[] }
+  | { kind: 'breaking'; reason: string }
+
+/**
+ * Compara o cabeçalho gravado na planilha com o que o schema descreve hoje.
+ *
+ * POR QUE ISTO EXISTE. O registro de migrações protege contra "subi a versão e
+ * esqueci de registrar" — um teste falha. Mas não protege contra o caso mais
+ * provável de todos: **mexer numa coluna e esquecer de subir a versão**. Aí
+ * nada detectava, o instalador escrevia o cabeçalho novo sobre linhas na ordem
+ * velha, e os dados se desalinhavam em silêncio.
+ *
+ * Esta função não depende da disciplina de ninguém: olha a planilha de verdade
+ * e recusa o que não for compatível.
+ *
+ * Acrescentar coluna NO FIM é seguro — as linhas antigas ficam com a célula
+ * nova vazia. Qualquer outra coisa (renomear, remover, reordenar, inserir no
+ * meio) desloca dados e exige migração.
+ */
+export function compareHeaders(expected: string[], found: readonly unknown[]): HeaderDrift {
+  const headers = found.map((header) => String(header ?? '').trim())
+  while (headers.length > 0 && headers[headers.length - 1] === '') headers.pop()
+
+  if (headers.length === 0) return { kind: 'empty' }
+
+  const overlap = Math.min(expected.length, headers.length)
+  for (let index = 0; index < overlap; index += 1) {
+    if (headers[index] !== expected[index]) {
+      return {
+        kind: 'breaking',
+        reason: `coluna ${index + 1} é "${headers[index]}" na planilha e "${expected[index]}" no schema`,
+      }
+    }
+  }
+
+  if (headers.length > expected.length) {
+    return {
+      kind: 'breaking',
+      reason:
+        `a planilha tem ${headers.length} colunas e o schema descreve ${expected.length} — ` +
+        `sobra "${headers[expected.length]}"`,
+    }
+  }
+
+  if (headers.length < expected.length) {
+    return { kind: 'additive', added: expected.slice(headers.length) }
+  }
+
+  return { kind: 'identical' }
+}
+
+export interface SheetDrift {
+  title: string
+  drift: HeaderDrift
+}
+
+/** Confere o cabeçalho de todas as abas de dados contra o schema atual. */
+export async function checkDataSheetDrift(context: SheetsContext): Promise<SheetDrift[]> {
+  // Lê algumas colunas a mais do que o schema descreve, para enxergar coluna
+  // que sobrou — é assim que uma remoção é detectada.
+  const ranges = DATA_SHEETS.map((spec) =>
+    ref(spec.title, `A1:${columnLetterOf(spec.columns.length + 4)}1`),
+  )
+
+  const response = await context.api.spreadsheets.values.batchGet({
+    spreadsheetId: context.spreadsheetId,
+    ranges,
+    valueRenderOption: 'FORMATTED_VALUE',
+  })
+
+  const valueRanges = response.data.valueRanges ?? []
+
+  return DATA_SHEETS.map((spec, index) => ({
+    title: spec.title,
+    drift: compareHeaders(
+      spec.columns.map((column) => column.header),
+      (valueRanges[index]?.values ?? [])[0] ?? [],
+    ),
+  }))
+}
+
+/** Duplicada de `bootstrap` de propósito: importar de lá criaria ciclo. */
+function columnLetterOf(index: number): string {
+  let letter = ''
+  let value = index
+  while (value >= 0) {
+    letter = String.fromCharCode((value % 26) + 65) + letter
+    value = Math.floor(value / 26) - 1
+  }
+  return letter
+}
+
+export const BLOCKED_BY_DRIFT =
+  'A estrutura das abas de dados na planilha não bate com o schema do código, e a diferença ' +
+  'não é apenas coluna nova no fim. Reinstalar agora escreveria o cabeçalho novo por cima das ' +
+  'linhas antigas, desalinhando os dados. Registre uma migração em src/sheets/migrations.ts e ' +
+  'rode `npm run sheet:migrate`.'
+
+// ---------------------------------------------------------------------------
 // Versão gravada
 // ---------------------------------------------------------------------------
 

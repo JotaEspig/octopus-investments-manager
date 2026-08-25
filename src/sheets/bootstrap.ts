@@ -27,7 +27,13 @@ import {
 } from './schema'
 import { explainSheetsError, type SheetsContext } from './client'
 import { applyStyling } from './styling'
-import { BLOCKED_BY_MIGRATION, planMigrations, runMigrations } from './migrations'
+import {
+  BLOCKED_BY_DRIFT,
+  BLOCKED_BY_MIGRATION,
+  checkDataSheetDrift,
+  planMigrations,
+  runMigrations,
+} from './migrations'
 
 /**
  * Instalador da planilha — a ESTRUTURA.
@@ -370,6 +376,24 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
   if (plan.pending.length > 0) {
     const migrated = await runMigrations(context, { backup: false })
     actions.push(`Migrado da v${migrated.from} para a v${migrated.to}`)
+  }
+
+  // Cinto além do suspensório: a checagem acima confia em alguém ter subido a
+  // versão. Esta olha a planilha de verdade e pega o caso mais provável de
+  // todos — mexer numa coluna e esquecer de versionar a mudança.
+  const drift = await checkDataSheetDrift(context)
+  const broken = drift.filter((entry) => entry.drift.kind === 'breaking')
+  if (broken.length > 0) {
+    const details = broken
+      .map((entry) => `  · ${entry.title}: ${(entry.drift as { reason: string }).reason}`)
+      .join('\n')
+    throw new Error(`${BLOCKED_BY_DRIFT}\n\n${details}`)
+  }
+
+  for (const entry of drift) {
+    if (entry.drift.kind === 'additive') {
+      actions.push(`${entry.title}: coluna(s) nova(s) — ${entry.drift.added.join(', ')}`)
+    }
   }
 
   // --- 4. Dialeto ---------------------------------------------------------

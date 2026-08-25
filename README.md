@@ -150,10 +150,23 @@ algo sair errado, a recuperação é apagar a aba quebrada e renomear a cópia d
 volta. Confira o resultado antes de apagar os backups — o `sheet:migrate` os
 lista quando não há nada pendente.
 
+**Três defesas, em camadas**, porque cada uma cobre um jeito diferente de errar:
+
+| Erro | O que pega |
+|---|---|
+| Subiu `SCHEMA_VERSION` e não registrou a migração | Um teste falha no CI |
+| Registrou uma migração destrutiva e tentou reinstalar direto | `sheet:install` recusa e manda usar `sheet:migrate` |
+| **Mexeu numa coluna e esqueceu de versionar** | `sheet:install` lê o cabeçalho da planilha, compara com o schema e recusa |
+
+A terceira é a que importa mais, porque é a mais provável e a única que não
+depende da disciplina de quem escreve o código. Ela distingue o que é seguro do
+que não é: coluna nova **no fim** passa (as linhas antigas só ficam com a célula
+vazia); renomear, remover, reordenar ou inserir no meio desloca dados e trava,
+apontando qual aba e qual coluna divergiu.
+
 Cada versão tem uma entrada em `src/sheets/migrations.ts`, mesmo as aditivas:
 sem isso não daria para dizer, olhando só o registro, o que aconteceu entre
-duas versões. Um teste falha se alguém subir `SCHEMA_VERSION` sem registrar a
-migração correspondente.
+duas versões.
 
 O módulo já traz as primitivas para as mudanças destrutivas típicas —
 `insertColumn`, `deleteColumn`, `moveColumn`, `renameSheet`, `transformColumn`

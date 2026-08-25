@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { SCHEMA_VERSION } from './schema'
-import { MIGRATIONS, pendingMigrations } from './migrations'
+import { SCHEMA_VERSION, TRADES_SHEET } from './schema'
+import { MIGRATIONS, compareHeaders, pendingMigrations } from './migrations'
 
 /**
  * O registro de migrações é a única defesa contra alguém subir
@@ -52,6 +52,63 @@ describe('pendingMigrations', () => {
   it('vem em ordem crescente, para aplicar uma versão por vez', () => {
     const versions = pendingMigrations(0).map((m) => m.to)
     expect([...versions].sort((a, b) => a - b)).toEqual(versions)
+  })
+})
+
+/**
+ * A deriva estrutural é a defesa que NÃO depende de ninguém lembrar de subir a
+ * versão. Cada caso aqui é uma forma real de estragar dados.
+ */
+describe('compareHeaders', () => {
+  const base = ['ID', 'Data', 'Tipo', 'Ativo']
+
+  it('aceita cabeçalho idêntico', () => {
+    expect(compareHeaders(base, [...base])).toEqual({ kind: 'identical' })
+  })
+
+  it('trata aba vazia como aba nova, não como problema', () => {
+    expect(compareHeaders(base, [])).toEqual({ kind: 'empty' })
+    expect(compareHeaders(base, ['', '', ''])).toEqual({ kind: 'empty' })
+  })
+
+  it('aceita coluna nova NO FIM — as linhas antigas só ficam com a célula vazia', () => {
+    expect(compareHeaders([...base, 'Moeda'], base)).toEqual({
+      kind: 'additive',
+      added: ['Moeda'],
+    })
+  })
+
+  it('recusa remoção de coluna', () => {
+    // O schema perdeu "Ativo", mas a planilha ainda tem dados nela.
+    const drift = compareHeaders(['ID', 'Data', 'Tipo'], base)
+    expect(drift.kind).toBe('breaking')
+    expect((drift as { reason: string }).reason).toContain('Ativo')
+  })
+
+  it('recusa coluna inserida no MEIO', () => {
+    const drift = compareHeaders(['ID', 'Data', 'Corretora', 'Tipo', 'Ativo'], base)
+    expect(drift.kind).toBe('breaking')
+    expect((drift as { reason: string }).reason).toContain('coluna 3')
+  })
+
+  it('recusa reordenação', () => {
+    const drift = compareHeaders(['ID', 'Tipo', 'Data', 'Ativo'], base)
+    expect(drift.kind).toBe('breaking')
+    expect((drift as { reason: string }).reason).toContain('coluna 2')
+  })
+
+  it('recusa renomeação, que de fora parece inofensiva', () => {
+    const drift = compareHeaders(['ID', 'Data', 'Operação', 'Ativo'], base)
+    expect(drift.kind).toBe('breaking')
+  })
+
+  it('ignora células vazias à direita do cabeçalho', () => {
+    expect(compareHeaders(base, [...base, '', ''])).toEqual({ kind: 'identical' })
+  })
+
+  it('reconhece a aba Operações real como idêntica a si mesma', () => {
+    const headers = TRADES_SHEET.columns.map((column) => column.header)
+    expect(compareHeaders(headers, headers)).toEqual({ kind: 'identical' })
   })
 })
 
