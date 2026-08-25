@@ -214,6 +214,34 @@ function dashboardContent(): ValueRange[] {
   ]
 }
 
+/** Verde para ganho, vermelho para perda — tons legíveis nos dois temas do Sheets. */
+function returnColorRules(sheetId: number, columnIndex: number): sheets_v4.Schema$Request[] {
+  const range = {
+    sheetId,
+    startRowIndex: VIEW_FIRST_ROW - 1,
+    endRowIndex: VIEW_FIRST_ROW + VIEW_ROWS - 1,
+    startColumnIndex: columnIndex,
+    endColumnIndex: columnIndex + 1,
+  }
+
+  const rule = (type: string, color: { red: number; green: number; blue: number }) => ({
+    addConditionalFormatRule: {
+      rule: {
+        ranges: [range],
+        booleanRule: {
+          condition: { type, values: [{ userEnteredValue: '0' }] },
+          format: { textFormat: { foregroundColor: color } },
+        },
+      },
+    },
+  })
+
+  return [
+    rule('NUMBER_GREATER', { red: 0.06, green: 0.5, blue: 0.25 }),
+    rule('NUMBER_LESS', { red: 0.72, green: 0.15, blue: 0.15 }),
+  ]
+}
+
 // ---------------------------------------------------------------------------
 // Gráficos
 // ---------------------------------------------------------------------------
@@ -452,6 +480,16 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
           : column.format
       const request = format ? numberFormatRequest(id, index, VIEW_FIRST_ROW, format) : null
       if (request) formatRequests.push(request)
+    }
+
+    // Ganho em verde, perda em vermelho. Só na primeira instalação: recriar as
+    // regras a cada rodada empilharia duplicatas na planilha.
+    if ((sheetsByTitle.get(spec.title)?.conditionalFormats ?? []).length === 0) {
+      for (const header of ['Rendimento', 'Rendimento %', 'Rendimento (R$)']) {
+        const column = spec.columns.findIndex((candidate) => candidate.header === header)
+        if (column < 0) continue
+        formatRequests.push(...returnColorRules(id, column))
+      }
     }
 
     // O total da aba mora na linha 1 e é sempre em reais, mesmo nas classes
