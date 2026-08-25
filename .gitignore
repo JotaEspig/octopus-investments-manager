@@ -7,6 +7,11 @@ out/
 dist/
 *.tsbuildinfo
 
+# Gerado pelo Next a cada execução, e o conteúdo muda entre `dev` e `build`
+# (.next/types vs .next/dev/types). Versionar só rendia ruído no diff.
+# É recriado sozinho por `next dev` e `next build`.
+next-env.d.ts
+
 # segredos — NUNCA versionar
 .env
 .env.local
