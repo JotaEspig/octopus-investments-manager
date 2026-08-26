@@ -1,3 +1,5 @@
+import { missingHistoryMonths } from '@/domain/history'
+import { fromSheetDate, today } from '@/lib/dates'
 import { tryLoadConfig } from '@/lib/env'
 import { explainSheetsError, getSheetsContext, readServiceAccountKey } from './client'
 import {
@@ -199,6 +201,44 @@ export async function diagnose(): Promise<Diagnosis> {
   // números continuam ali parecendo certos — só velhos.
   const health = appsScriptHealth(lastRun, new Date())
   checks.push({ label: 'Motor (Apps Script)', status: health.status, detail: health.detail })
+
+  // O histórico é a única coisa que não se recupera sozinha. Descobrir o
+  // buraco é metade do conserto; a outra metade é o backfill no Apps Script.
+  if (titles.has(SHEET.trades) && titles.has(SHEET.history)) {
+    try {
+      const values = await context.api.spreadsheets.values.batchGet({
+        spreadsheetId: config.spreadsheetId,
+        ranges: [ref(SHEET.trades, 'B2:B'), ref(SHEET.history, 'A2:A')],
+        valueRenderOption: 'UNFORMATTED_VALUE',
+        dateTimeRenderOption: 'FORMATTED_STRING',
+      })
+
+      const [tradeDates, historyDates] = (values.data.valueRanges ?? []).map((range) =>
+        (range.values ?? []).map((row) => fromSheetDate(row[0])).filter(Boolean),
+      )
+
+      const first = [...(tradeDates ?? [])].sort()[0] ?? null
+      const missing = missingHistoryMonths(first, historyDates ?? [], today())
+
+      if (missing.length > 0) {
+        checks.push({
+          label: 'Histórico do patrimônio',
+          status: 'warn',
+          detail:
+            `${missing.length} mês(es) sem snapshot: ${missing.join(', ')}. ` +
+            'Na planilha, use Carteira → Reconstruir meses faltantes.',
+        })
+      } else if (first) {
+        checks.push({
+          label: 'Histórico do patrimônio',
+          status: 'ok',
+          detail: `Sem buracos desde ${first.slice(0, 7)}`,
+        })
+      }
+    } catch {
+      // Sem histórico legível não há o que reportar — não é motivo de alarme.
+    }
+  }
 
   return {
     ready: missingSheets.length === 0 && schemaVersion === expectedSchemaVersion,

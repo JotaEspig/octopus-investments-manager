@@ -50,6 +50,13 @@ const CLASS_TOTAL_RANGES = [
   'TOTAL_FIXED_INCOME',
 ]
 
+/**
+ * Ordem das colunas de classe no `Histórico`. Espelha `ASSET_CLASSES` de
+ * `src/domain/types.ts` — trocar a ordem lá sem trocar aqui embaralha o
+ * histórico em silêncio.
+ */
+const CLASS_ORDER = ['us_stock', 'us_etf', 'br_stock', 'br_fii', 'fixed_income']
+
 /** Série 12 do SGS: CDI diário em % ao dia. Aberta, sem chave nem cadastro. */
 const SGS_CDI_URL = 'https://api.bcb.gov.br/dados/serie/bcdata.sgs.12/dados'
 
@@ -68,6 +75,7 @@ function onOpen() {
     .createMenu('Carteira')
     .addItem('Atualizar agora', 'dailyUpdate')
     .addItem('Gravar snapshot do mês', 'snapshotMonthly')
+    .addItem('Reconstruir meses faltantes', 'backfillHistoryWithFeedback')
     .addSeparator()
     .addItem('Ativar atualização diária', 'installTriggers')
     .addItem('Desativar atualização diária', 'removeTriggers')
@@ -76,21 +84,56 @@ function onOpen() {
     .addToUi()
 }
 
+/**
+ * Instala DOIS gatilhos, e o segundo é rede de segurança.
+ *
+ * O diário faz o trabalho. O de abertura existe porque o histórico é a única
+ * coisa que se perde de forma irreversível: se o gatilho diário quebrar (o
+ * Google desativa após falhas repetidas) e o mês virar sem nenhum snapshot,
+ * aquele mês some. Como você abre a planilha para olhar a carteira, essa
+ * abertura vira a segunda chance.
+ */
 function installTriggers() {
   removeTriggers()
+
   ScriptApp.newTrigger('dailyUpdate').timeBased().everyDays(1).atHour(20).create()
+  ScriptApp.newTrigger('onOpenSafetyNet')
+    .forSpreadsheet(SpreadsheetApp.getActive())
+    .onOpen()
+    .create()
+
   SpreadsheetApp.getUi().alert(
     'Atualização diária ativada.\n\n' +
-      'Roda todo dia por volta das 20h: busca o CDI no Banco Central, marca a ' +
-      'renda fixa na curva e atualiza o histórico do patrimônio.',
+      'Roda todo dia por volta das 20h: atualiza as cotações, busca o CDI no ' +
+      'Banco Central, marca a renda fixa na curva e grava o histórico.\n\n' +
+      'Também gravamos o snapshot ao abrir a planilha, caso o mês vire sem o ' +
+      'gatilho ter rodado.',
   )
 }
 
 function removeTriggers() {
+  const handlers = ['dailyUpdate', 'onOpenSafetyNet']
   const triggers = ScriptApp.getProjectTriggers()
   for (let i = 0; i < triggers.length; i += 1) {
-    if (triggers[i].getHandlerFunction() === 'dailyUpdate') ScriptApp.deleteTrigger(triggers[i])
+    if (handlers.indexOf(triggers[i].getHandlerFunction()) >= 0) ScriptApp.deleteTrigger(triggers[i])
   }
+}
+
+/**
+ * Roda ao abrir a planilha. Só age se o mês corrente ainda não tem linha —
+ * abrir a planilha não pode custar meio minuto de recálculo toda vez.
+ */
+function onOpenSafetyNet() {
+  if (hasSnapshotFor(todayIso().slice(0, 7))) return
+  snapshotMonthly()
+}
+
+function hasSnapshotFor(month) {
+  const rows = readRows(sheetByName(SHEETS.history), 1)
+  for (let i = 0; i < rows.length; i += 1) {
+    if (toIso(rows[i][0]).slice(0, 7) === month) return true
+  }
+  return false
 }
 
 /**
@@ -466,6 +509,242 @@ function readNamedNumber(spreadsheet, name) {
   if (!range) return 0
   const value = Number(range.getValue())
   return isNaN(value) ? 0 : value
+}
+
+// ---------------------------------------------------------------------------
+// 3b. Backfill do histórico
+// ---------------------------------------------------------------------------
+
+/**
+ * Reconstrói meses que ficaram sem snapshot.
+ *
+ * O HISTÓRICO É A ÚNICA COISA IRREVERSÍVEL do projeto. CDI e renda fixa se
+ * recuperam sozinhos porque são recalculados da série inteira; o patrimônio de
+ * um mês passado, não — ninguém guarda "quanto valia a carteira em julho".
+ *
+ * Mas dá para reconstruir, porque as três peças existem:
+ *   · a POSIÇÃO em qualquer data sai do livro-razão, que tem as datas
+ *   · o PREÇO daquela data sai do GOOGLEFINANCE, que aceita data histórica
+ *   · a RENDA FIXA sai da marcação na curva até aquela data
+ *
+ * Rode pelo menu depois de descobrir que o gatilho ficou parado. É idempotente:
+ * só preenche mês ausente, nunca reescreve o que já existe.
+ */
+/** Versão de menu: diz o que fez, porque pelo menu não há retorno para ler. */
+function backfillHistoryWithFeedback() {
+  const missing = missingMonths()
+
+  if (missing.length === 0) {
+    SpreadsheetApp.getUi().alert('Nenhum mês faltando — o histórico está completo.')
+    return
+  }
+
+  const filled = backfillHistory()
+  SpreadsheetApp.getUi().alert(
+    filled +
+      ' mês(es) reconstruído(s):\n\n' +
+      missing.join(', ') +
+      '\n\nValores calculados com a cotação de fechamento de cada data e a ' +
+      'posição que o livro-razão tinha naquele momento.',
+  )
+}
+
+function backfillHistory() {
+  const missing = missingMonths()
+  if (missing.length === 0) {
+    return 0
+  }
+
+  // Área de rascunho isolada, em vez de um canto da Config: fórmula histórica
+  // precisa de espaço e não pode esbarrar em dado de verdade.
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet()
+  const scratch = spreadsheet.insertSheet('__backfill__')
+
+  const rows = []
+  try {
+    for (let i = 0; i < missing.length; i += 1) {
+      const asOf = lastDayOfMonth(missing[i])
+      rows.push(portfolioValueAt(asOf, scratch))
+    }
+  } finally {
+    spreadsheet.deleteSheet(scratch)
+  }
+
+  const sheet = sheetByName(SHEETS.history)
+  sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows)
+  sortHistory()
+
+  return rows.length
+}
+
+/** Meses entre o primeiro aporte e hoje que não têm linha no histórico. */
+function missingMonths() {
+  const trades = readRows(sheetByName(SHEETS.trades), 2)
+
+  let first = ''
+  for (let i = 0; i < trades.length; i += 1) {
+    const iso = toIso(trades[i][1])
+    if (iso && (first === '' || iso < first)) first = iso
+  }
+  if (!first) return []
+
+  const existing = {}
+  const history = readRows(sheetByName(SHEETS.history), 1)
+  for (let i = 0; i < history.length; i += 1) {
+    existing[toIso(history[i][0]).slice(0, 7)] = true
+  }
+
+  const missing = []
+  const today = todayIso().slice(0, 7)
+  let cursor = first.slice(0, 7)
+
+  while (cursor <= today) {
+    // O mês corrente fica de fora: ele é do `snapshotMonthly`, que usa cotação
+    // de agora em vez de histórica.
+    if (cursor !== today && !existing[cursor]) missing.push(cursor)
+    cursor = nextMonth(cursor)
+  }
+
+  return missing
+}
+
+function nextMonth(yyyymm) {
+  const year = Number(yyyymm.slice(0, 4))
+  const month = Number(yyyymm.slice(5, 7))
+  return month === 12 ? year + 1 + '-01' : yyyymm.slice(0, 4) + '-' + pad(month + 1)
+}
+
+function lastDayOfMonth(yyyymm) {
+  const year = Number(yyyymm.slice(0, 4))
+  const month = Number(yyyymm.slice(5, 7))
+  // Dia 0 do mês seguinte é o último dia deste.
+  const date = new Date(Date.UTC(year, month, 0))
+  return Utilities.formatDate(date, 'UTC', 'yyyy-MM-dd')
+}
+
+/**
+ * Patrimônio numa data passada, na forma de linha do `Histórico`.
+ *
+ * Escreve as fórmulas de cotação histórica em bloco na aba de rascunho, lê o
+ * resultado e descarta — uma ida à rede por mês, e não por ativo.
+ */
+function portfolioValueAt(asOf, scratch) {
+  const assets = readRows(sheetByName(SHEETS.assets), 4)
+  const symbols = []
+  const formulas = []
+
+  for (let i = 0; i < assets.length; i += 1) {
+    const symbol = String(assets[i][0] || '').trim()
+    if (!symbol) continue
+    const assetClass = String(assets[i][2] || '').trim()
+    const brazilian = assetClass === 'br_stock' || assetClass === 'br_fii'
+    symbols.push({ symbol: symbol, assetClass: assetClass })
+    formulas.push([historicalCloseFormula(brazilian ? 'BVMF:' + symbol : symbol, asOf)])
+  }
+
+  // Câmbio da data vai na última linha do bloco.
+  formulas.push([historicalCloseFormula('CURRENCY:USDBRL', asOf)])
+
+  scratch.getRange(1, 1, formulas.length, 1).setFormulas(formulas)
+  SpreadsheetApp.flush()
+  const prices = scratch.getRange(1, 1, formulas.length, 1).getValues()
+  scratch.clear()
+
+  const fx = Number(prices[formulas.length - 1][0]) || 0
+
+  const byClass = {}
+  for (let i = 0; i < CLASS_ORDER.length; i += 1) byClass[CLASS_ORDER[i]] = 0
+
+  for (let i = 0; i < symbols.length; i += 1) {
+    const quantity = quantityAt(symbols[i].symbol, asOf)
+    if (quantity <= 0) continue
+
+    const price = Number(prices[i][0]) || 0
+    const usd = symbols[i].assetClass === 'us_stock' || symbols[i].assetClass === 'us_etf'
+    const value = quantity * price * (usd ? fx : 1)
+
+    if (byClass[symbols[i].assetClass] !== undefined) byClass[symbols[i].assetClass] += value
+  }
+
+  byClass.fixed_income = fixedIncomeValueAt(asOf)
+
+  const row = [new Date(asOf + 'T12:00:00Z')]
+  let total = 0
+  for (let i = 0; i < CLASS_ORDER.length; i += 1) total += byClass[CLASS_ORDER[i]]
+  row.push(round2(total))
+  for (let i = 0; i < CLASS_ORDER.length; i += 1) row.push(round2(byClass[CLASS_ORDER[i]]))
+
+  return row
+}
+
+/**
+ * Fechamento na data, ou no pregão anterior mais próximo.
+ *
+ * A janela de 7 dias cobre fim de semana e feriado; `LET` liga a chamada uma
+ * vez e `ROWS` pega a última linha, que é a mais recente do intervalo.
+ */
+function historicalCloseFormula(ticker, asOf) {
+  const parts = asOf.split('-')
+  const date = 'DATE(' + Number(parts[0]) + ';' + Number(parts[1]) + ';' + Number(parts[2]) + ')'
+  return (
+    '=IFERROR(LET(h;GOOGLEFINANCE("' + ticker + '";"close";' + date + '-7;' + date + ');' +
+    'INDEX(h;ROWS(h);2));0)'
+  )
+}
+
+/** Posição de um ativo numa data: compras menos vendas até ali. */
+function quantityAt(symbol, asOf) {
+  const rows = readRows(sheetByName(SHEETS.trades), 5)
+  let quantity = 0
+
+  for (let i = 0; i < rows.length; i += 1) {
+    if (String(rows[i][3] || '').trim() !== symbol) continue
+    if (toIso(rows[i][1]) > asOf) continue
+
+    const kind = String(rows[i][2] || '').trim()
+    const amount = Number(rows[i][4]) || 0
+    if (kind === 'buy') quantity += amount
+    else if (kind === 'sell') quantity -= amount
+  }
+
+  return quantity
+}
+
+/** Renda fixa marcada na curva até a data — reaproveita `markToCurve`. */
+function fixedIncomeValueAt(asOf) {
+  const contracts = readRows(sheetByName(SHEETS.fixedIncome), 11)
+  if (contracts.length === 0) return 0
+
+  const series = readCdiSeries()
+  const applications = readApplicationsBySymbol()
+  let total = 0
+
+  for (let i = 0; i < contracts.length; i += 1) {
+    const symbol = String(contracts[i][0] || '').trim()
+    if (!symbol) continue
+
+    const indexer = String(contracts[i][3] || 'cdi').trim()
+    const rate = Number(contracts[i][4]) || 0
+    const entries = applications[symbol] || []
+
+    for (let j = 0; j < entries.length; j += 1) {
+      if (entries[j].date > asOf) continue
+      total +=
+        entries[j].kind === 'buy'
+          ? markToCurve(entries[j].amount, indexer, rate, entries[j].date, asOf, series)
+          : -entries[j].amount
+    }
+  }
+
+  return Math.max(0, total)
+}
+
+/** Ordena o histórico por data — o backfill anexa no fim, fora de ordem. */
+function sortHistory() {
+  const sheet = sheetByName(SHEETS.history)
+  const lastRow = sheet.getLastRow()
+  if (lastRow < 3) return
+  sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).sort({ column: 1, ascending: true })
 }
 
 // ---------------------------------------------------------------------------

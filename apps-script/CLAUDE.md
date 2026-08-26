@@ -64,3 +64,30 @@ manuais do setup. Não tente automatizar: já foi verificado que não dá.
 Não há teste automatizado aqui. A verificação é manual, pelo editor do Apps
 Script: rodar `fetchCdi()` e conferir contra o site do BCB, e rodar
 `snapshotMonthly()` duas vezes para confirmar que não duplica a linha do mês.
+
+## O histórico é a única coisa irreversível
+
+CDI e renda fixa se recuperam sozinhos — são recalculados da série inteira a
+cada execução. O patrimônio de um mês passado, não: ninguém guarda "quanto
+valia a carteira em julho".
+
+Três camadas cuidam disso, e mexer numa exige entender o papel dela:
+
+1. **`onOpenSafetyNet`** — gatilho instalável de abertura. Só age se o mês
+   corrente não tem linha, porque abrir a planilha não pode custar meio minuto
+   de recálculo. É a rede que pega o caso comum (gatilho diário quebrado, mas
+   você abriu a planilha para olhar a carteira).
+2. **`missingHistoryMonths`** em `src/domain/history.ts` — descobre o buraco e
+   o `/setup` reporta. Ignora o mês CORRENTE de propósito: ele é do snapshot
+   diário, e tratá-lo como buraco faria reclamar todo dia 1º.
+3. **`backfillHistory`** — reconstrói. Posição vem do livro-razão, preço vem do
+   `GOOGLEFINANCE` com data histórica (validado: funciona para ação americana,
+   ticker `BVMF:` e câmbio, inclusive anos atrás), renda fixa vem da marcação
+   na curva.
+
+`CLASS_ORDER` espelha `ASSET_CLASSES` de `src/domain/types.ts`. Trocar a ordem
+lá sem trocar aqui embaralha as colunas do histórico em silêncio.
+
+O backfill usa uma aba de rascunho temporária (`__backfill__`), criada e
+apagada em `finally`. É de propósito: fórmula histórica precisa de espaço e não
+pode esbarrar em dado de verdade num canto da `Config`.

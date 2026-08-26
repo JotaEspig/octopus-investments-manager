@@ -203,18 +203,33 @@ trabalha é o Apps Script, num gatilho diário na nuvem do Google.
 | **CDI** | sim | **não** — busca do último dia gravado até hoje |
 | **Renda fixa** | sim | **não** — recalcula da série inteira toda vez |
 | **Cotações** | sim | **não** — o script força o recálculo antes de ler |
-| **Histórico** | sim | **sim, e é permanente** |
+| **Histórico** | sim | **sim — mas é reconstruível** |
 
-> [!IMPORTANT]
-> O gráfico de patrimônio é **mensal**, não diário: um ponto por mês, atualizado
-> a cada execução enquanto o mês está aberto. Se o gatilho ficar quebrado um mês
-> inteiro, aquele mês não existe e não volta — patrimônio passado não se
-> reconstrói olhando para frente.
+O gráfico de patrimônio é **mensal**, não diário: um ponto por mês, atualizado a
+cada execução enquanto o mês está aberto.
 
-Por isso o `/setup` mostra um check **Motor (Apps Script)** com a última
-execução. Gatilho parado é a falha mais silenciosa do projeto: a planilha
-continua ali, com números que parecem certos — só velhos. O Google desativa
-gatilhos após falhas repetidas e avisa por um e-mail fácil de não ver.
+### Três camadas protegem o histórico
+
+Ele é a única coisa do projeto que não se recupera sozinha — CDI e renda fixa
+são recalculados da série inteira, mas ninguém guarda *"quanto valia a carteira
+em julho"*. Por isso:
+
+| Camada | O que faz |
+|---|---|
+| **Gatilho de abertura** | Abrir a planilha grava o snapshot, se o mês ainda não tiver. Como você abre para olhar a carteira, isso já cobre quase tudo |
+| **Diagnóstico** | `/setup` avisa *"3 meses sem snapshot"* e *"o motor não roda há 12 dias"* |
+| **Backfill** | **Carteira → Reconstruir meses faltantes** refaz o mês perdido |
+
+O backfill funciona porque as três peças existem: a **posição** de qualquer data
+sai do livro-razão, o **preço** daquela data sai do `GOOGLEFINANCE` histórico, e
+a **renda fixa** sai da marcação na curva. É idempotente — só preenche mês
+ausente, nunca reescreve o que já está lá.
+
+> [!TIP]
+> Gatilho parado é a falha mais silenciosa do projeto: a planilha continua ali,
+> com números que parecem certos — só velhos. O Google desativa gatilhos após
+> falhas repetidas e avisa por um e-mail fácil de não ver. É para isso que serve
+> o check **Motor (Apps Script)**.
 
 <details>
 <summary><b>Por que forçar o recálculo das cotações</b></summary>
