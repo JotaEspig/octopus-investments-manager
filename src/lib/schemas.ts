@@ -61,12 +61,24 @@ export const tradeInputSchema = z
 
 export type TradeInput = z.infer<typeof tradeInputSchema>
 
+/**
+ * Classe e corretora são obrigatórias e sem padrão — nem aqui, nem no
+ * formulário.
+ *
+ * Classe pré-selecionada vira ativo cadastrado na classe errada, e classe
+ * errada desloca a alocação inteira sem ninguém notar. Corretora com valor
+ * sugerido vira histórico dizendo que tudo está num lugar onde não está.
+ *
+ * A regra vale nos dois lados: o que o formulário exige, a rota também exige.
+ */
 export const assetInputSchema = z.object({
   symbol,
   name: z.string().trim().min(1, 'Informe o nome do ativo').max(120),
-  assetClass: z.enum(ASSET_CLASSES),
+  assetClass: z.enum(ASSET_CLASSES, { message: 'Escolha a classe do ativo' }),
   currency: z.enum(CURRENCIES),
-  broker: z.string().trim().max(60).default(''),
+  // A mensagem no construtor cobre também o campo AUSENTE; sozinho, o `min`
+  // só pega o campo vazio e deixa vazar o texto padrão em inglês do zod.
+  broker: z.string({ message: 'Informe a corretora' }).trim().min(1, 'Informe a corretora').max(60),
 })
 
 export type AssetInput = z.infer<typeof assetInputSchema>

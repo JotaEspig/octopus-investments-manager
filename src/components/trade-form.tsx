@@ -80,7 +80,12 @@ interface FormState {
   note: string
   newSymbol: string
   newName: string
-  newClass: AssetClass
+  /**
+   * Vazio até o usuário escolher. Nada de classe pré-selecionada: um padrão
+   * silencioso vira ativo cadastrado na classe errada, e classe errada
+   * desloca a alocação inteira sem ninguém notar.
+   */
+  newClass: AssetClass | ''
   newBroker: string
   contractSymbol: string
   contractName: string
@@ -105,8 +110,8 @@ const INITIAL: FormState = {
   note: '',
   newSymbol: '',
   newName: '',
-  newClass: 'us_etf',
-  newBroker: 'Avenue',
+  newClass: '',
+  newBroker: '',
   contractSymbol: '',
   contractName: '',
   contractIssuer: '',
@@ -142,13 +147,22 @@ export function TradeForm({ assets, contracts, onSubmitted }: TradeFormProps) {
   const knownContract = contracts.some((contract) => contract.symbol === form.symbol)
   const isFixedIncome = creatingContract || knownContract
 
-  const currency: Currency = useMemo(() => {
+  /**
+   * `null` enquanto não dá para saber — ativo não escolhido, ou classe do
+   * ativo novo ainda em branco. Chutar BRL aqui rotularia os campos com uma
+   * moeda que o usuário não escolheu, que é o tipo de palpite que faz alguém
+   * cadastrar compra em dólar como se fosse em real.
+   */
+  const currency: Currency | null = useMemo(() => {
     if (isFixedIncome) return 'BRL'
-    if (creatingAsset) return CURRENCY_OF_CLASS[form.newClass]
-    return assets.find((asset) => asset.symbol === form.symbol)?.currency ?? 'BRL'
+    if (creatingAsset) return form.newClass ? CURRENCY_OF_CLASS[form.newClass] : null
+    return assets.find((asset) => asset.symbol === form.symbol)?.currency ?? null
   }, [assets, creatingAsset, form.newClass, form.symbol, isFixedIncome])
 
-  const needsFx = currency !== 'BRL'
+  const needsFx = currency === 'USD'
+
+  /** Sufixo de moeda nos rótulos. Some enquanto a moeda é desconhecida. */
+  const currencyLabel = currency ? ` (${currency})` : ''
   const kinds = isFixedIncome ? FIXED_INCOME_KINDS : MARKET_KINDS
   const kindLabel = (kind: TradeKind) =>
     (isFixedIncome ? FIXED_INCOME_KIND_LABELS[kind] : undefined) ?? TRADE_KIND_LABELS[kind]
@@ -358,11 +372,19 @@ export function TradeForm({ assets, contracts, onSubmitted }: TradeFormProps) {
               required
             />
           </Field>
-          <Field label="Classe" hint={`Moeda: ${currency}`}>
+          <Field
+            label="Classe"
+            hint={currency ? `Moeda: ${currency}` : 'Define a moeda do ativo'}
+            error={errors['newAsset.assetClass']}
+          >
             <Select
               value={form.newClass}
-              onChange={(event) => set('newClass', event.target.value as AssetClass)}
+              onChange={(event) => set('newClass', event.target.value as AssetClass | '')}
+              required
             >
+              <option value="" disabled>
+                Selecione…
+              </option>
               {MARKET_CLASSES.map((assetClass) => (
                 <option key={assetClass} value={assetClass}>
                   {ASSET_CLASS_LABELS[assetClass]}
@@ -370,8 +392,13 @@ export function TradeForm({ assets, contracts, onSubmitted }: TradeFormProps) {
               ))}
             </Select>
           </Field>
-          <Field label="Corretora">
-            <Input value={form.newBroker} onChange={(event) => set('newBroker', event.target.value)} />
+          <Field label="Corretora" error={errors['newAsset.broker']}>
+            <Input
+              value={form.newBroker}
+              onChange={(event) => set('newBroker', event.target.value)}
+              placeholder="Onde o ativo está custodiado"
+              required
+            />
           </Field>
         </fieldset>
       ) : null}
@@ -502,7 +529,7 @@ export function TradeForm({ assets, contracts, onSubmitted }: TradeFormProps) {
               />
             </Field>
             <Field
-              label={`${form.kind === 'dividend' ? 'Valor por cota' : 'Preço unitário'} (${currency})`}
+              label={`${form.kind === 'dividend' ? 'Valor por cota' : 'Preço unitário'}${currencyLabel}`}
               error={errors['trade.unitPrice']}
             >
               <Input
@@ -514,7 +541,7 @@ export function TradeForm({ assets, contracts, onSubmitted }: TradeFormProps) {
                 required
               />
             </Field>
-            <Field label={`Taxas (${currency})`} hint="Corretagem e emolumentos">
+            <Field label={`Taxas${currencyLabel}`} hint="Corretagem e emolumentos">
               <Input
                 type="number"
                 step="any"
