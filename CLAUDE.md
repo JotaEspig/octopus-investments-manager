@@ -1,5 +1,32 @@
 @AGENTS.md
 
+# Octopus — mapa do projeto
+
+Gerenciador de investimentos com o **Google Sheets como fonte de verdade**. A
+planilha é o painel; a interface local é só o livro-caixa; o servidor MCP dá ao
+agente acesso somente-leitura à carteira real.
+
+Cada pasta tem um `CLAUDE.md` com as armadilhas específicas dela — leia o da
+área antes de mexer:
+
+| Pasta | O que você precisa saber antes |
+|---|---|
+| `src/domain/` | Regras financeiras. Puro, sem I/O, e é a **autoridade** sobre os números |
+| `src/sheets/` | A área com mais armadilhas: contrato, dialeto de fórmula, migrações, injeção |
+| `src/app/` | Interface e rotas. **Não tem dashboard, e é deliberado** |
+| `src/lib/` | Dinheiro, datas, câmbio, validação |
+| `apps-script/` | Roda dentro da planilha. Duplica `domain/fixed-income.ts` de propósito |
+| `mcp/` | **Somente leitura.** Nunca adicione tool de escrita |
+| `scripts/` | Os `npm run sheet:*`. Sem `--force` em operação destrutiva |
+| `.claude/` | Agente e skills. Edite aqui, não em `~/.claude/` |
+
+Dois princípios valem em todo lugar:
+
+- **Abas de dados ≠ abas de apresentação.** O código só escreve nas de dados; as
+  visuais são derivadas por fórmula e o instalador as reconstrói inteiras.
+- **`Operações` é append-only.** Posição e preço médio são *projeções* dele,
+  nunca campos guardados.
+
 # Regra: mudanças no schema da planilha
 
 A planilha guarda anos de histórico de aportes e **não pode ser recriada**.
