@@ -1,6 +1,14 @@
 import { tryLoadConfig } from '@/lib/env'
 import { explainSheetsError, getSheetsContext, readServiceAccountKey } from './client'
-import { DASHBOARD, DATA_SHEETS, SCHEMA_VERSION, SHEET, VIEW_SHEETS, ref } from './schema'
+import {
+  APPS_SCRIPT_LAST_RUN,
+  DASHBOARD,
+  DATA_SHEETS,
+  SCHEMA_VERSION,
+  SHEET,
+  VIEW_SHEETS,
+  ref,
+} from './schema'
 
 /**
  * Diagnóstico do setup — o que a página `/setup` mostra antes de deixar
@@ -14,6 +22,59 @@ export interface Check {
   label: string
   status: CheckStatus
   detail: string
+}
+
+/** Quantos dias sem rodar antes de virar aviso. Folga para falha isolada do BCB. */
+const STALE_AFTER_DAYS = 2
+
+/**
+ * Traduz o carimbo do Apps Script em diagnóstico.
+ *
+ * Puro, para poder ser testado sem planilha — e porque a regra ("a partir de
+ * quantos dias isso vira problema?") é justamente o tipo de coisa que se quer
+ * poder ajustar sem medo.
+ *
+ * Nunca ter rodado é diferente de ter parado: o primeiro é setup incompleto, o
+ * segundo é gatilho quebrado. A mensagem distingue os dois porque a ação é
+ * diferente.
+ */
+export function appsScriptHealth(
+  lastRun: string | null,
+  now: Date,
+): { status: CheckStatus; detail: string; daysAgo: number | null } {
+  if (!lastRun || !String(lastRun).trim()) {
+    return {
+      status: 'warn',
+      detail:
+        'Nunca rodou. Cole apps-script/Code.gs na planilha e clique em ' +
+        'Carteira → Ativar atualização diária — sem isso, nada se atualiza sozinho.',
+      daysAgo: null,
+    }
+  }
+
+  const when = Date.parse(String(lastRun))
+  if (Number.isNaN(when)) {
+    return { status: 'warn', detail: `Carimbo ilegível: "${lastRun}"`, daysAgo: null }
+  }
+
+  const daysAgo = Math.floor((now.getTime() - when) / 86_400_000)
+  const local = new Date(when).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
+
+  if (daysAgo > STALE_AFTER_DAYS) {
+    return {
+      status: 'warn',
+      detail:
+        `Não roda há ${daysAgo} dias (última: ${local}). O Google desativa gatilhos após ` +
+        'falhas repetidas — confira o e-mail da conta e reative pelo menu Carteira.',
+      daysAgo,
+    }
+  }
+
+  return {
+    status: 'ok',
+    detail: daysAgo === 0 ? `Rodou hoje, às ${local}` : `Última execução: ${local}`,
+    daysAgo,
+  }
 }
 
 export interface Diagnosis {
@@ -101,15 +162,22 @@ export async function diagnose(): Promise<Diagnosis> {
         },
   )
 
+  // Uma leitura só de `Config` inteira, procurando as chaves pelo NOME. Ler
+  // `B2` presumiria a posição da linha, e chave nova entrando antes quebraria.
   let schemaVersion: number | null = null
+  let lastRun: string | null = null
+
   if (titles.has(SHEET.config)) {
     try {
       const values = await context.api.spreadsheets.values.get({
         spreadsheetId: config.spreadsheetId,
-        range: ref(SHEET.config, 'A2:B2'),
+        range: ref(SHEET.config, 'A2:B'),
       })
-      const row = values.data.values?.[0]
-      if (row?.[0] === 'schema_version') schemaVersion = Number(row[1])
+      for (const row of values.data.values ?? []) {
+        const key = String(row[0] ?? '').trim()
+        if (key === 'schema_version') schemaVersion = Number(row[1])
+        if (key === APPS_SCRIPT_LAST_RUN) lastRun = String(row[1] ?? '')
+      }
     } catch {
       // Config existe mas está vazia — a instalação preenche.
     }
@@ -126,6 +194,11 @@ export async function diagnose(): Promise<Diagnosis> {
           },
     )
   }
+
+  // O motor é o que mantém a planilha viva com tudo desligado. Sem ele, os
+  // números continuam ali parecendo certos — só velhos.
+  const health = appsScriptHealth(lastRun, new Date())
+  checks.push({ label: 'Motor (Apps Script)', status: health.status, detail: health.detail })
 
   return {
     ready: missingSheets.length === 0 && schemaVersion === expectedSchemaVersion,

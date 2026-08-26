@@ -14,6 +14,27 @@ renda fixa sozinha.
 > pós-fixado aplica o percentual sobre a TAXA diária, prefixado e IPCA+ usam
 > base 252, e o dia da aplicação não rende.
 
+## A ordem de `dailyUpdate()` importa
+
+```
+refreshQuotes → fetchCdi → repriceFixedIncome → snapshotMonthly → recordLastRun
+```
+
+**`refreshQuotes` vem primeiro** porque o snapshot depende das cotações. O
+`GOOGLEFINANCE` só recalcula com a planilha ABERTA, e o gatilho roda com ela
+fechada — sem forçar, o histórico seria construído sobre preço congelado do
+último dia em que alguém abriu, e sem nenhum sinal disso. Forçar é apagar a
+fórmula e reescrevê-la; não existe API de "recalcule agora".
+
+Isso abre uma janela de milissegundos com a coluna vazia. Por isso as fórmulas
+são lidas para a memória ANTES, a restauração está em `finally`, e existe
+`repairQuotes()` no menu para reconstruí-las a partir de `Ativos`. Ao mexer
+nessa função, **preserve as três proteções**.
+
+**`recordLastRun` vem por último**, e só se tudo passou: carimbo gravado após
+falha diria que está tudo bem quando não está. É ele que faz `/setup` conseguir
+dizer "não roda há 12 dias" — sem isso, gatilho quebrado é invisível.
+
 ## Restrições do ambiente
 
 - Sem `import`/`export` e sem npm. Só as globais do Apps Script

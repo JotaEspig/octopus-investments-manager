@@ -30,11 +30,17 @@
 // Devem bater exatamente com src/sheets/schema.ts.
 const SHEETS = {
   trades: 'Operações',
+  assets: 'Ativos',
   fixedIncome: 'Contratos RF',
+  quotes: 'Cotações',
   cdi: 'CDI',
   history: 'Histórico',
+  config: 'Config',
   dashboard: 'Painel',
 }
+
+/** Chave em `Config` com o carimbo da última execução. Igual ao schema.ts. */
+const LAST_RUN_KEY = 'apps_script_last_run'
 
 const CLASS_TOTAL_RANGES = [
   'TOTAL_US_STOCK',
@@ -65,6 +71,8 @@ function onOpen() {
     .addSeparator()
     .addItem('Ativar atualização diária', 'installTriggers')
     .addItem('Desativar atualização diária', 'removeTriggers')
+    .addSeparator()
+    .addItem('Reparar fórmulas de cotação', 'repairQuotes')
     .addToUi()
 }
 
@@ -85,11 +93,23 @@ function removeTriggers() {
   }
 }
 
-/** O que o gatilho executa. */
+/**
+ * O que o gatilho executa.
+ *
+ * A ORDEM importa. As cotações vêm primeiro porque o snapshot depende delas: o
+ * `GOOGLEFINANCE` só recalcula com a planilha ABERTA, e o gatilho roda com ela
+ * fechada. Sem forçar, o histórico seria construído sobre preço congelado do
+ * último dia em que alguém abriu — e sem nenhum sinal disso.
+ *
+ * O carimbo vai por último, e só se tudo passou: um `last_run` gravado após
+ * falha diria que está tudo bem quando não está.
+ */
 function dailyUpdate() {
+  refreshQuotes()
   fetchCdi()
   repriceFixedIncome()
   snapshotMonthly()
+  recordLastRun()
 }
 
 // ---------------------------------------------------------------------------
@@ -137,6 +157,85 @@ function readRows(sheet, columns) {
   const lastRow = sheet.getLastRow()
   if (lastRow < 2) return []
   return sheet.getRange(2, 1, lastRow - 1, columns).getValues()
+}
+
+// ---------------------------------------------------------------------------
+// 0. Cotações
+// ---------------------------------------------------------------------------
+
+/**
+ * Força o GOOGLEFINANCE a buscar preço novo.
+ *
+ * O PROBLEMA. O Sheets só recalcula `GOOGLEFINANCE` enquanto a planilha está
+ * aberta no navegador. Com ela fechada — que é o normal — o valor fica
+ * congelado. Como o gatilho roda de madrugada com ninguém olhando, o snapshot
+ * mensal gravaria a cotação do último dia em que alguém abriu a planilha.
+ *
+ * A SOLUÇÃO. Apagar a fórmula e reescrevê-la obriga o Sheets a reavaliá-la, e
+ * aí ele busca preço novo. Não existe API para "recalcule agora"; reescrever é
+ * o caminho.
+ *
+ * O RISCO, e como ele é contido. Entre apagar e reescrever há uma janela de
+ * milissegundos em que a coluna fica vazia. Se o script morrer exatamente ali
+ * (timeout, cota), as fórmulas somem. Por isso: elas são lidas para a memória
+ * ANTES de qualquer escrita, a restauração acontece em `finally`, e o menu tem
+ * "Reparar fórmulas de cotação" para reconstruí-las a partir de `Ativos` caso
+ * o pior aconteça.
+ */
+function refreshQuotes() {
+  const sheet = sheetByName(SHEETS.quotes)
+  const lastRow = sheet.getLastRow()
+  if (lastRow < 2) return 0
+
+  const range = sheet.getRange(2, 2, lastRow - 1, 1)
+  const formulas = range.getFormulas()
+
+  // Sem fórmula nenhuma não há o que atualizar — e apagar seria só destruir.
+  let count = 0
+  for (let i = 0; i < formulas.length; i += 1) {
+    if (String(formulas[i][0] || '').charAt(0) === '=') count += 1
+  }
+  if (count === 0) return 0
+
+  try {
+    range.clearContent()
+    SpreadsheetApp.flush()
+  } finally {
+    range.setFormulas(formulas)
+    SpreadsheetApp.flush()
+  }
+
+  return count
+}
+
+/**
+ * Reconstrói as fórmulas de cotação a partir de `Ativos`.
+ *
+ * Rede de segurança do `refreshQuotes`, e também a saída para quando uma
+ * fórmula é apagada sem querer. Espelha `quoteFormula()` de
+ * `src/sheets/repositories.ts` — ativo brasileiro leva o prefixo `BVMF:`.
+ */
+function repairQuotes() {
+  const assets = readRows(sheetByName(SHEETS.assets), 4)
+  const quotes = sheetByName(SHEETS.quotes)
+
+  const rows = []
+  for (let i = 0; i < assets.length; i += 1) {
+    const symbol = String(assets[i][0] || '').trim()
+    if (!symbol) continue
+
+    const assetClass = String(assets[i][2] || '').trim()
+    const brazilian = assetClass === 'br_stock' || assetClass === 'br_fii'
+    const ticker = brazilian ? 'BVMF:' + symbol : symbol
+
+    rows.push([symbol, '=GOOGLEFINANCE("' + ticker + '";"price")', String(assets[i][3] || 'BRL')])
+  }
+
+  if (rows.length === 0) return 0
+
+  quotes.getRange(2, 1, rows.length, 3).setValues(rows)
+  SpreadsheetApp.flush()
+  return rows.length
 }
 
 // ---------------------------------------------------------------------------
@@ -367,4 +466,42 @@ function readNamedNumber(spreadsheet, name) {
   if (!range) return 0
   const value = Number(range.getValue())
   return isNaN(value) ? 0 : value
+}
+
+// ---------------------------------------------------------------------------
+// 4. Carimbo da execução
+// ---------------------------------------------------------------------------
+
+/**
+ * Grava em `Config` quando o script rodou pela última vez, em UTC ISO 8601.
+ *
+ * Existe porque o gatilho pode parar sem ninguém perceber: o Google desativa
+ * gatilhos após falhas repetidas e avisa por um e-mail fácil de não ver. Sem
+ * este carimbo, a única forma de descobrir seria abrir o editor do Apps Script
+ * — e a planilha continuaria parecendo certa, só velha.
+ *
+ * Com ele, `/setup` e `npm run verify:sheet` conseguem dizer "não roda há 12
+ * dias".
+ *
+ * UTC e não local: é dado que máquina lê. Quem exibe converte.
+ */
+function recordLastRun() {
+  const sheet = sheetByName(SHEETS.config)
+  const rows = readRows(sheet, 1)
+
+  const stamp = Utilities.formatDate(new Date(), 'UTC', "yyyy-MM-dd'T'HH:mm:ss'Z'")
+
+  for (let i = 0; i < rows.length; i += 1) {
+    if (String(rows[i][0] || '').trim() === LAST_RUN_KEY) {
+      sheet.getRange(i + 2, 2).setValue(stamp)
+      return stamp
+    }
+  }
+
+  // Chave ausente: planilha anterior à v3 do schema. Acrescenta em vez de
+  // falhar — o instalador colocaria no lugar certo depois.
+  sheet.getRange(sheet.getLastRow() + 1, 1, 1, 3).setValues([
+    [LAST_RUN_KEY, stamp, 'Última execução do Apps Script (UTC ISO).'],
+  ])
+  return stamp
 }

@@ -424,6 +424,15 @@ export const MIGRATIONS: Migration[] = [
     touchesData: false,
     apply: async () => ['Nada a transformar — mudança aditiva'],
   },
+  {
+    to: 3,
+    title: 'Carimbo da última execução do Apps Script',
+    description:
+      'Chave nova em Config (`apps_script_last_run`), para dar para saber que o gatilho ' +
+      'diário parou. Aditiva: o instalador só acrescenta chaves ausentes.',
+    touchesData: false,
+    apply: async () => ['Nada a transformar — o instalador acrescenta a chave'],
+  },
 ]
 
 /**

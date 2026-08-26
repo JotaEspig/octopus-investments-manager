@@ -193,6 +193,51 @@ imposto em silêncio.
 
 ---
 
+## O que se atualiza sozinho
+
+Com a interface desligada e a planilha fechada — que é o estado normal — quem
+trabalha é o Apps Script, num gatilho diário na nuvem do Google.
+
+| Peça | Atualiza sozinho | Tem gap se ficar dias sem rodar? |
+|---|---|---|
+| **CDI** | sim | **não** — busca do último dia gravado até hoje |
+| **Renda fixa** | sim | **não** — recalcula da série inteira toda vez |
+| **Cotações** | sim | **não** — o script força o recálculo antes de ler |
+| **Histórico** | sim | **sim, e é permanente** |
+
+> [!IMPORTANT]
+> O gráfico de patrimônio é **mensal**, não diário: um ponto por mês, atualizado
+> a cada execução enquanto o mês está aberto. Se o gatilho ficar quebrado um mês
+> inteiro, aquele mês não existe e não volta — patrimônio passado não se
+> reconstrói olhando para frente.
+
+Por isso o `/setup` mostra um check **Motor (Apps Script)** com a última
+execução. Gatilho parado é a falha mais silenciosa do projeto: a planilha
+continua ali, com números que parecem certos — só velhos. O Google desativa
+gatilhos após falhas repetidas e avisa por um e-mail fácil de não ver.
+
+<details>
+<summary><b>Por que forçar o recálculo das cotações</b></summary>
+
+<br/>
+
+O `GOOGLEFINANCE` só recalcula enquanto a planilha está **aberta** no navegador.
+Com ela fechada, o valor fica congelado — e o gatilho roda de madrugada, com
+ninguém olhando.
+
+Sem intervenção, o snapshot mensal gravaria a cotação do último dia em que
+alguém abriu a planilha, e o histórico inteiro seria construído sobre preço
+defasado **sem nenhum sinal disso**.
+
+Não existe API de "recalcule agora". O que funciona é apagar a fórmula e
+reescrevê-la, o que obriga o Sheets a reavaliá-la. Isso abre uma janela de
+milissegundos com a coluna vazia, contida em três camadas: as fórmulas são
+lidas para a memória antes de qualquer escrita, a restauração acontece em
+`finally`, e o menu **Carteira → Reparar fórmulas de cotação** as reconstrói a
+partir de `Ativos` caso o pior aconteça.
+
+</details>
+
 ## Comandos
 
 | Comando | O que faz |

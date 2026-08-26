@@ -45,8 +45,15 @@ describe('registro de migrações', () => {
 
 describe('pendingMigrations', () => {
   it('devolve o que falta a partir da versão instalada', () => {
-    expect(pendingMigrations(1).map((m) => m.to)).toEqual([2])
+    // Expressa o invariante, não a lista do dia: fixar `[2]` faria este teste
+    // quebrar a cada versão nova sem que nada estivesse errado.
+    const daV1 = Array.from({ length: SCHEMA_VERSION - 1 }, (_, index) => index + 2)
+    expect(pendingMigrations(1).map((m) => m.to)).toEqual(daV1)
     expect(pendingMigrations(SCHEMA_VERSION)).toEqual([])
+  })
+
+  it('quem já está na penúltima versão só pega a última', () => {
+    expect(pendingMigrations(SCHEMA_VERSION - 1).map((m) => m.to)).toEqual([SCHEMA_VERSION])
   })
 
   it('devolve vazio para uma planilha à frente do código', () => {

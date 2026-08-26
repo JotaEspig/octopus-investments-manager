@@ -13,7 +13,16 @@
 import { ASSET_CLASSES, ASSET_CLASS_LABELS, type AssetClass, type Currency } from '@/domain/types'
 
 /** Gravada em `Config`. O instalador compara e avisa quando a planilha está velha. */
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
+
+/**
+ * Chave em `Config` com o carimbo da última execução do Apps Script.
+ *
+ * Em UTC ISO 8601 — é dado que máquina lê, e ali ambiguidade de fuso custa
+ * caro. O que a pessoa vê convertido para o horário dela é responsabilidade de
+ * quem exibe.
+ */
+export const APPS_SCRIPT_LAST_RUN = 'apps_script_last_run'
 
 /**
  * Locale da planilha: define como datas e moeda aparecem, e também qual
@@ -391,6 +400,13 @@ export const CONFIG_ROWS: Array<{ key: string; value: string; description: strin
   { key: 'target_us_stock', value: '0,20', description: 'Meta de alocação — Ações EUA (satélite).' },
   { key: 'target_br_stock', value: '0', description: 'Meta de alocação — Ações Brasil.' },
   { key: 'target_br_fii', value: '0', description: 'Meta de alocação — FIIs.' },
+  {
+    key: APPS_SCRIPT_LAST_RUN,
+    value: '',
+    description:
+      'Última execução do Apps Script (UTC ISO). Escrito por ele; é como se descobre que o ' +
+      'gatilho diário parou — o Google desativa gatilhos após falhas repetidas.',
+  },
 ]
 
 /**
