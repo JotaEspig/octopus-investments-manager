@@ -433,6 +433,39 @@ export const MIGRATIONS: Migration[] = [
     touchesData: false,
     apply: async () => ['Nada a transformar — o instalador acrescenta a chave'],
   },
+  {
+    to: 4,
+    title: 'Modo privacidade',
+    description:
+      'Chave nova em Config (`privacy_mode`) e checkbox no Painel para ocultar valores ' +
+      'absolutos. Aditiva: o instalador só acrescenta a chave e cria o checkbox.',
+    touchesData: false,
+    apply: async () => ['Nada a transformar — o instalador acrescenta a chave e o checkbox'],
+  },
+  {
+    to: 5,
+    title: 'Olho nas abas de dados',
+    description:
+      'Renomeia as abas de dados que revelam valor de carteira (Operações, Contratos RF, ' +
+      'Histórico) com o prefixo 👁️ — sinal de que ali os valores aparecem em texto claro, sem ' +
+      'o mascaramento do modo privacidade. `Ativos`, `Cotações` e `CDI` ficam de fora: são ' +
+      'cadastro ou dado público de mercado, não posição nem patrimônio. Faz backup antes de ' +
+      'renomear.',
+    touchesData: true,
+    apply: async (ctx) => {
+      const renames: Array<[string, string]> = [
+        ['Operações', SHEET.trades],
+        ['Contratos RF', SHEET.fixedIncome],
+        ['Histórico', SHEET.history],
+      ]
+      const actions: string[] = []
+      for (const [from, to] of renames) {
+        await renameSheet(ctx, from, to)
+        actions.push(`aba renomeada: ${from} → ${to}`)
+      }
+      return actions
+    },
+  },
 ]
 
 /**

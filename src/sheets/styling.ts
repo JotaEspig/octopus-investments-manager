@@ -3,9 +3,11 @@ import { ASSET_CLASSES, type AssetClass } from '@/domain/types'
 import { explainSheetsError, type SheetsContext } from './client'
 import {
   CLASS_CURRENCY,
+  CONFIG_PRIVACY_ROW,
   DASHBOARD,
   DATA_SHEETS,
   NUMBER_FORMAT,
+  SHEET,
   VIEW_FIRST_ROW,
   VIEW_ROWS,
   VIEW_SHEETS,
@@ -66,6 +68,10 @@ const PALETTE = {
   negative: '#B3261E',
   /** Fundo dos rótulos do bloco de totais do Painel. */
   highlight: '#E8EFF7',
+  /** Controle de modo privacidade — grafite quase neutro, para não competir
+   * com nenhum dos dois emojis (👁️/🙈) e ainda destacar por contraste puro
+   * contra o resto do Painel. */
+  privacyAccent: '#1E293B',
 } as const
 
 // ---------------------------------------------------------------------------
@@ -257,6 +263,116 @@ function returnColors(sheetId: number, columnIndex: number): sheets_v4.Schema$Re
 }
 
 /**
+ * `ConditionalFormatRule.format` só aceita negrito/itálico/tachado/cor do
+ * texto/cor de fundo — não dá para trocar o número por um texto tipo "•••"
+ * via formatação condicional (a API rejeita `numberFormat` ali). O truque
+ * possível dentro dessa restrição é pintar o texto da MESMA cor do fundo: a
+ * célula vira um retângulo sólido, sem nenhum glifo visível.
+ *
+ * É só aparência: o valor por trás continua o número de verdade, e é isso que
+ * permite outras fórmulas (ordenação, soma, % da carteira) continuarem
+ * funcionando com o modo privacidade ligado. Limitação conhecida: selecionar
+ * a célula no Sheets troca o fundo pelo azul de seleção, e o texto reaparece
+ * — não é uma máscara à prova de clique, é para não expor valor na tela.
+ *
+ * O fundo do "bloco oculto" acompanha a cor da linha (listra clara/escura ou
+ * o destaque do total), só um pouco mais escuro — para a listra continuar
+ * guiando o olho mesmo com o valor escondido, em vez de virar uma faixa cinza
+ * uniforme.
+ */
+function darken(hex: string, factor = 0.9): Rgb {
+  const color = rgb(hex)
+  return { red: color.red * factor, green: color.green * factor, blue: color.blue * factor }
+}
+
+/**
+ * `INDIRECT`, não referência direta nem named range.
+ *
+ * Medido na planilha: `CUSTOM_FORMULA` da API do Sheets rejeita tanto named
+ * range (`Invalid ConditionValue.userEnteredValue`) quanto referência direta
+ * entre abas (`=Config!$B$10`) — só passa pela validação quando a referência
+ * entre abas vem embrulhada em `INDIRECT`.
+ *
+ * Por isso `AND`/`MOD` (que precisam do separador `;` ou `,` conforme o
+ * dialeto da planilha, e esta função não sabe qual foi detectado) também
+ * ficam de fora: a condição de paridade da linha usa só `ISEVEN`/`ISODD`
+ * (um argumento só) combinados por operador (`*`, `>`), que não dependem de
+ * dialeto nenhum.
+ */
+const PRIVACY_CONDITION = `INDIRECT("${SHEET.config}!B${CONFIG_PRIVACY_ROW}")`
+const PRIVACY_FORMULA = `=${PRIVACY_CONDITION}`
+
+/**
+ * Colunas de valor absoluto nas abas de classe. Fica de fora, de propósito:
+ * `Rendimento %`, `% da classe`, `Taxa`, `Vencimento` — o que já é relativo
+ * ou não é sensível continua visível com o modo privacidade ligado.
+ */
+const PRIVACY_MASKED_HEADERS = [
+  'Posição',
+  'Preço médio',
+  'Cotação',
+  'Custo total',
+  'Valor de mercado',
+  'Proventos',
+  'Rendimento',
+  'Aplicado (R$)',
+  'Valor bruto (R$)',
+  'Rendimento (R$)',
+]
+
+/**
+ * Máscara para um bloco de UMA cor só (linha de total/destaque, sem listra
+ * alternada) — fundo levemente mais escuro que `baseHex`.
+ */
+function privacyMaskFlat(range: sheets_v4.Schema$GridRange, baseHex: string): sheets_v4.Schema$Request {
+  const masked = darken(baseHex)
+  return {
+    addConditionalFormatRule: {
+      rule: {
+        ranges: [range],
+        booleanRule: {
+          condition: { type: 'CUSTOM_FORMULA', values: [{ userEnteredValue: PRIVACY_FORMULA }] },
+          format: { backgroundColor: masked, textFormat: { foregroundColor: masked } },
+        },
+      },
+    },
+  }
+}
+
+/**
+ * Máscara para um corpo de tabela com listra alternada: DUAS regras, uma por
+ * paridade de linha, cada uma um pouco mais escura que a cor da listra que
+ * ela substitui — a alternância continua visível, só mais escura.
+ *
+ * `firstDataRow` é a mesma linha passada para `banding()`: é ela que recebe
+ * `firstBandColor`, e é em relação a ela que a paridade é calculada.
+ */
+function privacyMaskBanded(range: sheets_v4.Schema$GridRange, firstDataRow: number): sheets_v4.Schema$Request[] {
+  const variants: Array<[string, string]> = [
+    [`ISEVEN(ROW()-${firstDataRow})`, PALETTE.bandEven],
+    [`ISODD(ROW()-${firstDataRow})`, PALETTE.bandOdd],
+  ]
+
+  return variants.map(([parity, baseHex]) => {
+    const masked = darken(baseHex)
+    return {
+      addConditionalFormatRule: {
+        rule: {
+          ranges: [range],
+          booleanRule: {
+            condition: {
+              type: 'CUSTOM_FORMULA',
+              values: [{ userEnteredValue: `=(${PRIVACY_CONDITION})*(${parity})>0` }],
+            },
+            format: { backgroundColor: masked, textFormat: { foregroundColor: masked } },
+          },
+        },
+      },
+    }
+  })
+}
+
+/**
  * Remove listras e regras condicionais existentes.
  *
  * Sem isto, cada execução do `sheet:style` empilharia uma camada nova e a
@@ -382,6 +498,30 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
       const column = spec.columns.findIndex((candidate) => candidate.header === header)
       if (column >= 0) requests.push(...returnColors(sheetId, column))
     }
+
+    // Modo privacidade: mascara os valores absolutos, mantendo percentuais
+    // (`Rendimento %`, `% da classe`) e dados não sensíveis (`Taxa`,
+    // `Vencimento`) visíveis. Localiza por cabeçalho, nunca por índice fixo.
+    for (const header of PRIVACY_MASKED_HEADERS) {
+      const column = spec.columns.findIndex((candidate) => candidate.header === header)
+      if (column < 0) continue
+      requests.push(
+        ...privacyMaskBanded(grid(sheetId, VIEW_FIRST_ROW - 1, lastRow, column, column + 1), VIEW_FIRST_ROW),
+      )
+    }
+    // `TOTAL_HEADER` ("Valor (R$)") não bate com nenhum item de
+    // `PRIVACY_MASKED_HEADERS` — é localizado por `spec.totalColumn`, não por
+    // texto de cabeçalho, porque o mesmo nome também rotula o total do topo
+    // (linha 1, fundo de destaque, mascarado à parte logo abaixo).
+    requests.push(
+      ...privacyMaskBanded(
+        grid(sheetId, VIEW_FIRST_ROW - 1, lastRow, spec.totalColumn, spec.totalColumn + 1),
+        VIEW_FIRST_ROW,
+      ),
+    )
+    requests.push(
+      privacyMaskFlat(grid(sheetId, 0, 1, spec.totalColumn, spec.totalColumn + 1), PALETTE.highlight),
+    )
   }
   actions.push(`${VIEW_SHEETS.length} seções coloridas, uma cor por classe`)
 
@@ -422,6 +562,12 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
         fields: 'userEnteredFormat(numberFormat,horizontalAlignment,textFormat)',
       },
     })
+    requests.push(
+      privacyMaskFlat(
+        grid(dashboardId, DASHBOARD.totalRow - 1, DASHBOARD.totalRow, 1, 2),
+        PALETTE.highlight,
+      ),
+    )
     requests.push({
       repeatCell: {
         range: grid(dashboardId, DASHBOARD.fxRow - 1, DASHBOARD.fxRow, 1, 2),
@@ -441,6 +587,66 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
           },
         },
         fields: 'userEnteredFormat(numberFormat,horizontalAlignment)',
+      },
+    })
+
+    // Checkbox de modo privacidade: bloco isolado no canto da linha do
+    // título, cor de destaque forte para ficar bem visível — não é mais um
+    // dado da lista, é um controle.
+    const privacyControlRange = grid(
+      dashboardId,
+      DASHBOARD.privacyRow - 1,
+      DASHBOARD.privacyRow,
+      DASHBOARD.privacyLabelColumn,
+      DASHBOARD.privacyCheckboxColumn + 1,
+    )
+    requests.push({
+      repeatCell: {
+        range: privacyControlRange,
+        cell: {
+          userEnteredFormat: {
+            backgroundColor: rgb(PALETTE.privacyAccent),
+            verticalAlignment: 'MIDDLE',
+            horizontalAlignment: 'CENTER',
+            textFormat: { bold: true, foregroundColor: rgb(PALETTE.headerText) },
+          },
+        },
+        fields: 'userEnteredFormat(backgroundColor,verticalAlignment,horizontalAlignment,textFormat)',
+      },
+    })
+    requests.push({
+      updateBorders: {
+        range: privacyControlRange,
+        top: { style: 'SOLID_MEDIUM', color: rgb(PALETTE.privacyAccent) },
+        bottom: { style: 'SOLID_MEDIUM', color: rgb(PALETTE.privacyAccent) },
+        left: { style: 'SOLID_MEDIUM', color: rgb(PALETTE.privacyAccent) },
+        right: { style: 'SOLID_MEDIUM', color: rgb(PALETTE.privacyAccent) },
+      },
+    })
+    // Coluna do rótulo larga o bastante para "🔒 Ocultar valores" caber sem
+    // estourar por cima da coluna do checkbox.
+    requests.push({
+      updateDimensionProperties: {
+        range: {
+          sheetId: dashboardId,
+          dimension: 'COLUMNS',
+          startIndex: DASHBOARD.privacyLabelColumn,
+          endIndex: DASHBOARD.privacyLabelColumn + 1,
+        },
+        properties: { pixelSize: 190 },
+        fields: 'pixelSize',
+      },
+    })
+    requests.push({
+      updateDimensionProperties: {
+        range: {
+          sheetId: dashboardId,
+          dimension: 'COLUMNS',
+          startIndex: DASHBOARD.privacyCheckboxColumn,
+          endIndex: DASHBOARD.privacyCheckboxColumn + 1,
+        },
+        properties: { pixelSize: 40 },
+        fields: 'pixelSize',
       },
     })
 
@@ -481,6 +687,9 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
         fields: 'userEnteredFormat(numberFormat,horizontalAlignment)',
       },
     })
+    requests.push(
+      ...privacyMaskBanded(grid(dashboardId, allocationFirst - 1, allocationLast, 1, 2), allocationFirst),
+    )
 
     // Desvio da meta: verde acima, vermelho abaixo.
     const driftRange = grid(dashboardId, allocationFirst - 1, allocationLast, 4, 5)
@@ -525,6 +734,12 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
         fields: 'userEnteredFormat(numberFormat,horizontalAlignment)',
       },
     })
+    requests.push(
+      ...privacyMaskBanded(
+        grid(dashboardId, DASHBOARD.assetsFirstRow - 1, assetsLast, 2, 3),
+        DASHBOARD.assetsFirstRow,
+      ),
+    )
 
     for (const [index, width] of [220, 150, 150, 120].entries()) {
       requests.push({

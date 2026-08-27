@@ -13,7 +13,7 @@
 import { ASSET_CLASSES, ASSET_CLASS_LABELS, type AssetClass, type Currency } from '@/domain/types'
 
 /** Gravada em `Config`. O instalador compara e avisa quando a planilha está velha. */
-export const SCHEMA_VERSION = 3
+export const SCHEMA_VERSION = 5
 
 /**
  * Chave em `Config` com o carimbo da última execução do Apps Script.
@@ -23,6 +23,16 @@ export const SCHEMA_VERSION = 3
  * quem exibe.
  */
 export const APPS_SCRIPT_LAST_RUN = 'apps_script_last_run'
+
+/**
+ * Chave em `Config` com o modo privacidade (oculta valores absolutos).
+ *
+ * Fonte de verdade durável: o checkbox do Painel escreve aqui via `onEdit` do
+ * Apps Script, e a formatação condicional de todas as abas lê daqui pelo
+ * intervalo nomeado `PRIVACIDADE` — não do checkbox em si, que uma
+ * reinstalação poderia recriar.
+ */
+export const PRIVACY_MODE_KEY = 'privacy_mode'
 
 /**
  * Locale da planilha: define como datas e moeda aparecem, e também qual
@@ -136,14 +146,31 @@ export const VIEW_FIRST_ROW = 3
 /**
  * Rótulos em português porque são o que você lê dentro da planilha — a decisão
  * de nomear identificadores em inglês vale para o código, não para a interface.
+ *
+ * As abas de DADOS que revelam valor de carteira (posição, aporte, patrimônio)
+ * levam 👁️ no nome: é o sinal, na própria barra de abas, de que ali os valores
+ * aparecem em texto claro — o modo privacidade só mascara as abas de
+ * apresentação (`Painel` e as de classe), nunca a base em si.
+ *
+ * `Ativos` (cadastro: ticker/nome/classe/moeda/corretora, sem quantidade nem
+ * valor), `Cotações` (preço de mercado, o mesmo que o GOOGLEFINANCE mostra
+ * pra qualquer um) e `CDI` (taxa pública do Banco Central) ficam de fora — não
+ * têm quantidade nem valor de carteira, só dado de mercado ou cadastro.
+ *
+ * `Config` também fica de fora, mas por outro motivo: é ela que
+ * `readSchemaVersion`/`writeSchemaVersion` leem ANTES de qualquer migração
+ * rodar, para descobrir em que versão a planilha está — se o nome dela também
+ * mudasse aqui, o código novo procuraria por uma aba que a migração ainda não
+ * criou, e `readSchemaVersion` voltaria `null` para todo mundo que ainda não
+ * migrou (medido: foi exatamente o que aconteceu ao testar).
  */
 export const SHEET = {
-  trades: 'Operações',
+  trades: '👁️ Operações',
   assets: 'Ativos',
-  fixedIncome: 'Contratos RF',
+  fixedIncome: '👁️ Contratos RF',
   quotes: 'Cotações',
   cdi: 'CDI',
-  history: 'Histórico',
+  history: '👁️ Histórico',
   config: 'Config',
   dashboard: 'Painel',
 } as const
@@ -407,6 +434,13 @@ export const CONFIG_ROWS: Array<{ key: string; value: string; description: strin
       'Última execução do Apps Script (UTC ISO). Escrito por ele; é como se descobre que o ' +
       'gatilho diário parou — o Google desativa gatilhos após falhas repetidas.',
   },
+  {
+    key: PRIVACY_MODE_KEY,
+    value: 'FALSO',
+    description:
+      'Oculta valores absolutos (R$) no Painel e nas abas de classe, mantendo percentuais. ' +
+      'Ligado pelo checkbox no Painel — não edite aqui direto, o checkbox é quem escreve.',
+  },
 ]
 
 /**
@@ -414,6 +448,9 @@ export const CONFIG_ROWS: Array<{ key: string; value: string; description: strin
  * `CAMBIO`, que as abas em USD usam para converter. O `2 +` é o cabeçalho.
  */
 export const CONFIG_FX_ROW = 2 + CONFIG_ROWS.findIndex((row) => row.key === 'usd_brl')
+
+/** Linha (1-based) de `Config` onde mora o modo privacidade — vira `PRIVACIDADE`. */
+export const CONFIG_PRIVACY_ROW = 2 + CONFIG_ROWS.findIndex((row) => row.key === PRIVACY_MODE_KEY)
 
 /** Prefixo das chaves de meta de alocação em `Config`. */
 export const TARGET_KEY_PREFIX = 'target_'
@@ -669,6 +706,16 @@ export const DASHBOARD = {
   totalRow: 3,
   fxRow: 4,
   updatedRow: 5,
+  /**
+   * Checkbox de modo privacidade — de propósito longe da coluna de valores
+   * (A/B), num canto isolado da linha do título, para não parecer mais um
+   * dado da lista.
+   */
+  privacyRow: 1,
+  /** Coluna (0-based) do rótulo "Ocultar valores". */
+  privacyLabelColumn: 5,
+  /** Coluna (0-based) do checkbox em si. */
+  privacyCheckboxColumn: 6,
   /** Linha do cabeçalho da tabela de alocação. */
   allocationHeaderRow: 7,
   /** Primeira linha de classe. */
@@ -683,16 +730,18 @@ export const DASHBOARD = {
 
 export const DASHBOARD_ALLOCATION_HEADERS = ['Classe', 'Valor (R$)', '% atual', 'Meta', 'Desvio']
 
-export const DASHBOARD_ASSETS_HEADERS = ['Ativo', 'Classe', 'Valor (R$)', CLASS_SHARE_HEADER]
+/** Participação do ativo no patrimônio total, não na classe. */
+const PORTFOLIO_SHARE_HEADER = '% da carteira'
+
+export const DASHBOARD_ASSETS_HEADERS = ['Ativo', 'Classe', 'Valor (R$)', PORTFOLIO_SHARE_HEADER]
 
 /**
  * Tabela de todos os ativos no Painel, ordenada por valor.
  *
  * Uma fórmula só: empilha as abas de classe num literal de matriz, descarta as
  * linhas vazias e ordena decrescente. A coluna de porcentagem é a participação
- * do ativo NA PRÓPRIA CLASSE — cada aba já a calcula, e aqui ela só é
- * transportada, então "BBAS3 20%" quer dizer 20% das ações brasileiras, não 20%
- * do patrimônio.
+ * do ativo no PATRIMÔNIO TOTAL — diferente da "% da classe" de cada aba, então
+ * "BBAS3 5%" aqui quer dizer 5% da carteira inteira, não 5% das ações brasileiras.
  *
  * É o único ponto do projeto que usa literal de matriz, e portanto o único que
  * depende dos separadores ambíguos — daí os tokens em vez de pontuação literal.
@@ -704,14 +753,13 @@ export function dashboardAssetsFormula(): string {
   const blocks = VIEW_SHEETS.map((spec) => {
     const symbols = ref(spec.title, `$A$${VIEW_FIRST_ROW}:$A$${lastRow}`)
     const values = ref(spec.title, `$K$${VIEW_FIRST_ROW}:$K$${lastRow}`)
-    const shares = ref(spec.title, `$L$${VIEW_FIRST_ROW}:$L$${lastRow}`)
     const label = ASSET_CLASS_LABELS[spec.assetClass]
 
     // O fallback mantém 4 colunas quando a classe está vazia: sem ele, um
     // FILTER sem resultado devolve #N/A e derruba a pilha inteira.
     return (
       `IFERROR(FILTER(` +
-      `{${symbols}${c}IF(${symbols}<>"";"${label}";"")${c}${values}${c}${shares}};` +
+      `{${symbols}${c}IF(${symbols}<>"";"${label}";"")${c}${values}${c}IFERROR(${values}/${NAMED_RANGE.total};0)};` +
       `${symbols}<>"");` +
       `{""${c}""${c}0${c}0})`
     )
@@ -730,3 +778,10 @@ export const NAMED_RANGE = {
 
 /** Quantas linhas do histórico os gráficos cobrem (12 meses folgados). */
 export const HISTORY_CHART_ROWS = 60
+
+/**
+ * Título do gráfico de patrimônio. Duplicado em `apps-script/Code.gs` (não dá
+ * para importar TypeScript lá) — é como o `onEdit` acha o gráfico certo para
+ * esconder o eixo Y quando o modo privacidade liga.
+ */
+export const HISTORY_CHART_TITLE = 'Patrimônio — últimos meses'

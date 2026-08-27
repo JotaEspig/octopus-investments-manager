@@ -10,6 +10,7 @@ import {
   DIALECT_PROBE,
   DIALECT_PROBE_EXPECTED,
   HISTORY_CHART_ROWS,
+  HISTORY_CHART_TITLE,
   NAMED_RANGE,
   SCHEMA_VERSION,
   SHEET,
@@ -156,6 +157,21 @@ function dashboardContent(): ValueRange[] {
         ['Atualizado em', '=NOW()'],
       ],
     },
+    // A célula do checkbox fica de fora de propósito: é escrita à parte, só
+    // na criação, para não resetar o clique do usuário a cada reinstalação.
+    //
+    // O rótulo É uma fórmula (não texto fixo): lê o checkbox ao lado e troca
+    // sozinho entre "olho aberto" e "olho fechado" — não depende do `onEdit`
+    // do Apps Script para isso, o próprio Sheets recalcula.
+    {
+      range: ref(DASHBOARD.title, `${columnLetter(DASHBOARD.privacyLabelColumn)}${DASHBOARD.privacyRow}`),
+      values: [
+        [
+          `=IF(${columnLetter(DASHBOARD.privacyCheckboxColumn)}${DASHBOARD.privacyRow};` +
+            `"🙈 Modo privacidade";"👁️ Modo privacidade")`,
+        ],
+      ],
+    },
     {
       range: ref(DASHBOARD.title, `A${DASHBOARD.allocationHeaderRow}:E${DASHBOARD.allocationHeaderRow}`),
       values: [DASHBOARD_ALLOCATION_HEADERS],
@@ -220,7 +236,7 @@ function chartRequests(dashboardId: number, historyId: number): sheets_v4.Schema
       addChart: {
         chart: {
           spec: {
-            title: 'Patrimônio — últimos meses',
+            title: HISTORY_CHART_TITLE,
             basicChart: {
               chartType: 'LINE',
               legendPosition: 'BOTTOM_LEGEND',
@@ -443,6 +459,25 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
     // Aba recém-criada: nada configurado ainda.
   }
 
+  // Checkbox do modo privacidade: só recebe o valor inicial se ainda estiver
+  // vazio. É o mesmo motivo de `Config` só escrever chaves ausentes — uma
+  // reinstalação não pode apagar o estado que o usuário já escolheu.
+  const privacyCell = ref(
+    DASHBOARD.title,
+    `${columnLetter(DASHBOARD.privacyCheckboxColumn)}${DASHBOARD.privacyRow}`,
+  )
+  try {
+    const existingPrivacy = await api.spreadsheets.values.get({ spreadsheetId, range: privacyCell })
+    const current = existingPrivacy.data.values?.[0]?.[0]
+    if (current === undefined || current === null || current === '') {
+      valueRanges.push({ range: privacyCell, values: [[false]] })
+      actions.push('Painel: checkbox de modo privacidade criado (desligado)')
+    }
+  } catch {
+    valueRanges.push({ range: privacyCell, values: [[false]] })
+    actions.push('Painel: checkbox de modo privacidade criado (desligado)')
+  }
+
   const missingConfig = CONFIG_ROWS.filter((row) => !configured.has(row.key))
   if (missingConfig.length > 0) {
     const startRow = 2 + configured.size
@@ -525,6 +560,24 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
       structureRequests.push({ addNamedRange: { namedRange: { name: target.name, range } } })
       actions.push(`Intervalo nomeado criado: ${target.name}`)
     }
+  }
+
+  // Checkbox do modo privacidade. Reaplicar a validação não apaga o valor da
+  // célula — é seguro rodar em toda reinstalação, como o resto desta seção.
+  const dashboardIdForPrivacy = sheetId(DASHBOARD.title)
+  if (dashboardIdForPrivacy !== null) {
+    structureRequests.push({
+      setDataValidation: {
+        range: {
+          sheetId: dashboardIdForPrivacy,
+          startRowIndex: DASHBOARD.privacyRow - 1,
+          endRowIndex: DASHBOARD.privacyRow,
+          startColumnIndex: DASHBOARD.privacyCheckboxColumn,
+          endColumnIndex: DASHBOARD.privacyCheckboxColumn + 1,
+        },
+        rule: { condition: { type: 'BOOLEAN' }, strict: true },
+      },
+    })
   }
 
   // Gráficos: só na primeira vez. Recriar apagaria ajustes manuais.

@@ -22,6 +22,10 @@
  * service account, então a API não consegue criá-lo. E a API do Apps Script
  * não cria gatilhos — só código rodando dentro do próprio script cria.
  *
+ * O `onEdit(e)` é diferente dos outros dois: é um simple trigger, reconhecido
+ * pelo nome assim que este arquivo é colado — sem precisar do passo 4. Hoje
+ * só espelha o checkbox de modo privacidade do Painel para `Config`.
+ *
  * ⚠️ Este arquivo duplica de propósito a lógica de src/domain/fixed-income.ts.
  * É o preço de a planilha funcionar sem o app. Mexeu numa fórmula aqui, mexa
  * lá também — `npm run verify:sheet` acusa se as duas divergirem.
@@ -29,18 +33,28 @@
 
 // Devem bater exatamente com src/sheets/schema.ts.
 const SHEETS = {
-  trades: 'Operações',
+  trades: '👁️ Operações',
   assets: 'Ativos',
-  fixedIncome: 'Contratos RF',
+  fixedIncome: '👁️ Contratos RF',
   quotes: 'Cotações',
   cdi: 'CDI',
-  history: 'Histórico',
+  history: '👁️ Histórico',
   config: 'Config',
   dashboard: 'Painel',
 }
 
 /** Chave em `Config` com o carimbo da última execução. Igual ao schema.ts. */
 const LAST_RUN_KEY = 'apps_script_last_run'
+
+/** Chave em `Config` com o modo privacidade. Igual ao schema.ts. */
+const PRIVACY_MODE_KEY = 'privacy_mode'
+
+/** Linha e coluna (1-based) do checkbox de modo privacidade no Painel. Igual ao schema.ts. */
+const DASHBOARD_PRIVACY_ROW = 1
+const DASHBOARD_PRIVACY_COL = 7 // G — privacyCheckboxColumn (0-based 6) + 1
+
+/** Título do gráfico de patrimônio. Igual a HISTORY_CHART_TITLE em schema.ts. */
+const HISTORY_CHART_TITLE = 'Patrimônio — últimos meses'
 
 const CLASS_TOTAL_RANGES = [
   'TOTAL_US_STOCK',
@@ -82,6 +96,59 @@ function onOpen() {
     .addSeparator()
     .addItem('Reparar fórmulas de cotação', 'repairQuotes')
     .addToUi()
+}
+
+/**
+ * Simple trigger: dispara sozinho ao editar a planilha, sem precisar dos dois
+ * cliques manuais que os gatilhos instalados (`dailyUpdate`, `onOpenSafetyNet`)
+ * exigem — funciona assim que este arquivo é colado no editor.
+ *
+ * Único uso hoje: espelhar o checkbox de modo privacidade do Painel para
+ * `Config`, que é a fonte de verdade durável (o Painel é reconstruído por
+ * `sheet:install`, `Config` não).
+ */
+function onEdit(e) {
+  const range = e.range
+  if (range.getSheet().getName() !== SHEETS.dashboard) return
+  if (range.getRow() !== DASHBOARD_PRIVACY_ROW || range.getColumn() !== DASHBOARD_PRIVACY_COL) return
+
+  const hidden = range.getValue() === true
+  writeConfigValue(PRIVACY_MODE_KEY, hidden)
+  togglePatrimonyChartAxis(hidden)
+}
+
+/** Grava um valor por chave em `Config`, sem mexer nas outras linhas. */
+function writeConfigValue(key, value) {
+  const sheet = sheetByName(SHEETS.config)
+  const rows = readRows(sheet, 2)
+  for (let i = 0; i < rows.length; i += 1) {
+    if (String(rows[i][0]) === key) {
+      sheet.getRange(i + 2, 2).setValue(value)
+      return
+    }
+  }
+}
+
+/**
+ * Esconde/mostra os rótulos numéricos do eixo Y do gráfico de patrimônio.
+ *
+ * A tabela mascarada não adianta nada se o gráfico ao lado mostra a mesma
+ * informação pela altura da linha com o eixo rotulado — por isso o modo
+ * privacidade também mexe aqui, não só nas células.
+ */
+function togglePatrimonyChartAxis(hidden) {
+  const sheet = sheetByName(SHEETS.dashboard)
+  const charts = sheet.getCharts()
+  for (let i = 0; i < charts.length; i += 1) {
+    const chart = charts[i]
+    if (chart.getOptions().get('title') !== HISTORY_CHART_TITLE) continue
+    const updated = chart
+      .modify()
+      .setOption('vAxis.textPosition', hidden ? 'none' : 'out')
+      .build()
+    sheet.updateChart(updated)
+    return
+  }
 }
 
 /**
