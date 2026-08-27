@@ -312,12 +312,18 @@ function fetchCdi() {
     SGS_CDI_URL + '?formato=json&dataInicial=' + toSgsDate(from) + '&dataFinal=' + toSgsDate(today)
 
   const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true })
+  const body = response.getContentText()
+
+  // Fora do horário de publicação (ou em fim de semana/feriado sem observação
+  // nova) o SGS responde 404 "Value(s) not found" para o intervalo pedido, em
+  // vez de 200 com corpo vazio — não é erro, é "nada de novo ainda".
+  if (response.getResponseCode() === 404 && /Value\(s\) not found/.test(body)) return 0
+
   if (response.getResponseCode() !== 200) {
     throw new Error('Banco Central respondeu ' + response.getResponseCode() + ' na série do CDI.')
   }
 
-  const body = response.getContentText()
-  // Fora do horário de publicação a série pode vir vazia — não é erro.
+  // Fora do horário de publicação a série também pode vir 200 vazia — não é erro.
   if (!body || body.trim() === '' || body.trim() === '[]') return 0
 
   const data = JSON.parse(body)
