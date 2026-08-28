@@ -3,6 +3,7 @@ import {
   ASSET_CLASSES,
   CURRENCIES,
   FIXED_INCOME_INDEXERS,
+  OBJECTIVES,
   TRADE_KINDS,
 } from '@/domain/types'
 
@@ -79,6 +80,13 @@ export const assetInputSchema = z.object({
   // A mensagem no construtor cobre também o campo AUSENTE; sozinho, o `min`
   // só pega o campo vazio e deixa vazar o texto padrão em inglês do zod.
   broker: z.string({ message: 'Informe a corretora' }).trim().min(1, 'Informe a corretora').max(60),
+  /**
+   * Segunda classificação, independente da classe. Obrigatória no cadastro —
+   * mesmo quando o valor é sugerido automaticamente (CDI/FII/IPCA/prefixado),
+   * o campo continua editável, e sugestão não confirmada não deveria passar
+   * batido.
+   */
+  objective: z.enum(OBJECTIVES, { message: 'Escolha o objetivo do ativo' }),
 })
 
 export type AssetInput = z.infer<typeof assetInputSchema>
@@ -98,6 +106,7 @@ export const fixedIncomeInputSchema = z
     maturity: isoDate,
     dailyLiquidity: z.boolean().default(false),
     fgc: z.boolean().default(false),
+    objective: z.enum(OBJECTIVES, { message: 'Escolha o objetivo do ativo' }),
   })
   .refine((contract) => contract.maturity > contract.issueDate, {
     message: 'Vencimento deve ser depois da aplicação',

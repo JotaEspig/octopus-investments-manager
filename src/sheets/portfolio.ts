@@ -29,11 +29,12 @@ export async function loadPortfolio(
     fxRate: data.fxRate,
     contracts: data.contracts,
     targets: data.targets,
+    objectiveTargets: data.objectiveTargets,
   })
 
   return {
     positions,
-    summary: buildSummary(positions, data.targets, new Date().toISOString()),
+    summary: buildSummary(positions, data.targets, new Date().toISOString(), data.objectiveTargets),
     data,
   }
 }

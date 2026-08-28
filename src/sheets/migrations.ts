@@ -466,6 +466,20 @@ export const MIGRATIONS: Migration[] = [
       return actions
     },
   },
+  {
+    to: 6,
+    title: 'Objetivo por ativo',
+    description:
+      'Coluna "Objetivo" no fim de `Ativos` e de `Contratos RF` (segunda classificação, ' +
+      'independente da classe), metas por objetivo em `Config` (`target_goal_*`) e tabela de ' +
+      'alocação por objetivo no Painel, logo abaixo da tabela por classe — tabelas na coluna da ' +
+      'esquerda (classe, objetivo, ativos), gráficos empilhados à direita. Aditiva: coluna nova ' +
+      'sempre no fim, chaves novas em `Config`, layout novo no Painel, tudo reconstruído pelo ' +
+      'instalador — inclusive a posição dos gráficos, que o `sheet:install` volta a alinhar a ' +
+      'cada execução (deixou de preservar posição manual).',
+    touchesData: false,
+    apply: async () => ['Nada a transformar — mudança aditiva'],
+  },
 ]
 
 /**

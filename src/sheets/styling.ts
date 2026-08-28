@@ -1,5 +1,5 @@
 import type { sheets_v4 } from 'googleapis'
-import { ASSET_CLASSES, type AssetClass } from '@/domain/types'
+import { ASSET_CLASSES, OBJECTIVES, type AssetClass } from '@/domain/types'
 import { explainSheetsError, type SheetsContext } from './client'
 import {
   CLASS_CURRENCY,
@@ -400,6 +400,75 @@ function clearDecorations(sheet: sheets_v4.Schema$Sheet): sheets_v4.Schema$Reque
   return requests
 }
 
+/**
+ * Zera TODA a formatação de célula de uma aba — cor de fundo, texto, borda,
+ * formato numérico.
+ *
+ * `clearDecorations` (acima) só cuida de listra e formatação condicional;
+ * `userEnteredFormat` posto por `repeatCell` (fundo do cabeçalho, número,
+ * etc.) fica pra sempre se ninguém apagar explicitamente. No Painel isso já
+ * causou sobra visível: quando uma tabela muda de linha ou coluna entre
+ * versões (a de objetivo já esteve ao lado da de classe, em H:L), a
+ * formatação da posição antiga não é reescrita e continua lá — células
+ * pintadas onde não deveria ter nada. Só o Painel precisa disto hoje, porque
+ * é a única aba cujo layout já mudou de posição; `DATA_SHEETS`/`VIEW_SHEETS`
+ * só crescem no fim.
+ */
+function clearAllCellFormat(sheetId: number): sheets_v4.Schema$Request {
+  return {
+    repeatCell: {
+      range: { sheetId },
+      cell: { userEnteredFormat: {} },
+      fields: 'userEnteredFormat',
+    },
+  }
+}
+
+/**
+ * Volta toda linha/coluna da aba para o tamanho padrão do Sheets (21px de
+ * altura, 100px de largura).
+ *
+ * Mesmo motivo de `clearAllCellFormat`: `updateDimensionProperties` marca a
+ * linha/coluna pelo ÍNDICE, não pelo conteúdo — uma linha que um dia foi
+ * cabeçalho (32px de altura) e deixou de ser continua com 32px pra sempre,
+ * porque nada nunca pede pra ela voltar ao padrão. Foi assim que a linha 35
+ * (cabeçalho da tabela de ativos numa posição de layout anterior a esta
+ * funcionalidade) ficou mais alta que as vizinhas mesmo depois de a tabela
+ * mudar de lugar.
+ */
+function resetDimensions(sheetId: number): sheets_v4.Schema$Request[] {
+  return [
+    {
+      updateDimensionProperties: {
+        range: { sheetId, dimension: 'ROWS' },
+        properties: { pixelSize: 21 },
+        fields: 'pixelSize',
+      },
+    },
+    {
+      updateDimensionProperties: {
+        range: { sheetId, dimension: 'COLUMNS' },
+        properties: { pixelSize: 100 },
+        fields: 'pixelSize',
+      },
+    },
+  ]
+}
+
+/** Contorno no PERÍMETRO do intervalo, sem linha entre colunas ou linhas internas. */
+function outerBorder(range: sheets_v4.Schema$GridRange): sheets_v4.Schema$Request {
+  const style = { style: 'SOLID' as const, color: rgb(PALETTE.border) }
+  return {
+    updateBorders: {
+      range,
+      top: style,
+      bottom: style,
+      left: style,
+      right: style,
+    },
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Estilização
 // ---------------------------------------------------------------------------
@@ -533,8 +602,18 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
     const allocationLast = allocationFirst + ASSET_CLASSES.length - 1
 
     requests.push(...clearDecorations(dashboard))
+    requests.push(clearAllCellFormat(dashboardId))
+    requests.push(...resetDimensions(dashboardId))
     requests.push(tabColor(dashboardId, PALETTE.dashboard))
     requests.push(titleCell(dashboardId, 1, PALETTE.dashboard, 20))
+    // Linha do título: fonte 20pt não cabe na altura padrão (21px).
+    requests.push({
+      updateDimensionProperties: {
+        range: { sheetId: dashboardId, dimension: 'ROWS', startIndex: 0, endIndex: 1 },
+        properties: { pixelSize: 40 },
+        fields: 'pixelSize',
+      },
+    })
 
     // Bloco de totais: rótulo à esquerda com fundo, valor à direita em destaque.
     requests.push({
@@ -560,6 +639,14 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
           },
         },
         fields: 'userEnteredFormat(numberFormat,horizontalAlignment,textFormat)',
+      },
+    })
+    // Linha do patrimônio total: fonte 16pt não cabe na altura padrão (21px).
+    requests.push({
+      updateDimensionProperties: {
+        range: { sheetId: dashboardId, dimension: 'ROWS', startIndex: DASHBOARD.totalRow - 1, endIndex: DASHBOARD.totalRow },
+        properties: { pixelSize: 30 },
+        fields: 'pixelSize',
       },
     })
     requests.push(
@@ -652,7 +739,13 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
 
     requests.push(...headerRow(dashboardId, DASHBOARD.allocationHeaderRow, 5, PALETTE.dashboard))
     requests.push(headerUnderline(dashboardId, DASHBOARD.allocationHeaderRow, 5))
-    requests.push(banding(dashboardId, allocationFirst, allocationLast + 1, 5))
+    // `allocationLast`, sem +1: o padrão usado em `VIEW_SHEETS` é bandear até
+    // a ÚLTIMA linha de dado, exclusive. Um `+1` aqui vazaria a listra pra
+    // dentro da linha em branco que separa esta tabela da de objetivo.
+    requests.push(banding(dashboardId, allocationFirst, allocationLast, 5))
+    requests.push(
+      outerBorder(grid(dashboardId, DASHBOARD.allocationHeaderRow - 1, allocationLast, 0, 5)),
+    )
 
     // Cada linha da alocação recebe a cor da sua classe, casando com a aba.
     ASSET_CLASSES.forEach((assetClass, index) => {
@@ -716,6 +809,7 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
     requests.push(...headerRow(dashboardId, DASHBOARD.assetsHeaderRow, 4, PALETTE.dashboard))
     requests.push(headerUnderline(dashboardId, DASHBOARD.assetsHeaderRow, 4))
     requests.push(banding(dashboardId, DASHBOARD.assetsFirstRow, assetsLast, 4))
+    requests.push(outerBorder(grid(dashboardId, DASHBOARD.assetsHeaderRow - 1, assetsLast, 0, 4)))
     requests.push({
       repeatCell: {
         range: grid(dashboardId, DASHBOARD.assetsFirstRow - 1, assetsLast, 2, 3),
@@ -751,7 +845,64 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
       })
     }
 
-    actions.push('Painel estilizado: totais em destaque, alocação e tabela de ativos')
+    // Tabela de alocação por objetivo — logo ABAIXO da de classe, mesma
+    // largura (A:E). Sem cor por linha, diferente da tabela de classe:
+    // objetivo não tem uma aba própria para casar a cor. Coluna A já fica
+    // larga o bastante (220px, ajustada mais abaixo para a tabela de
+    // ativos) para rótulos longos como "Proteção — sistêmica/moeda".
+    const objectivesFirst = DASHBOARD.objectivesFirstRow
+    const objectivesLast = objectivesFirst + OBJECTIVES.length - 1
+
+    requests.push(...headerRow(dashboardId, DASHBOARD.objectivesHeaderRow, 5, PALETTE.dashboard))
+    requests.push(headerUnderline(dashboardId, DASHBOARD.objectivesHeaderRow, 5))
+    // Mesmo motivo do `banding` da tabela de classe: sem +1, pra não vazar
+    // listra pra dentro da linha em branco antes da tabela de ativos.
+    requests.push(banding(dashboardId, objectivesFirst, objectivesLast, 5))
+    requests.push(
+      outerBorder(grid(dashboardId, DASHBOARD.objectivesHeaderRow - 1, objectivesLast, 0, 5)),
+    )
+
+    requests.push({
+      repeatCell: {
+        range: grid(dashboardId, objectivesFirst - 1, objectivesLast, 1, 2),
+        cell: {
+          userEnteredFormat: { numberFormat: NUMBER_FORMAT.brl!, horizontalAlignment: 'RIGHT' },
+        },
+        fields: 'userEnteredFormat(numberFormat,horizontalAlignment)',
+      },
+    })
+    requests.push({
+      repeatCell: {
+        range: grid(dashboardId, objectivesFirst - 1, objectivesLast, 2, 5),
+        cell: {
+          userEnteredFormat: { numberFormat: NUMBER_FORMAT.percent!, horizontalAlignment: 'RIGHT' },
+        },
+        fields: 'userEnteredFormat(numberFormat,horizontalAlignment)',
+      },
+    })
+    requests.push(
+      ...privacyMaskBanded(grid(dashboardId, objectivesFirst - 1, objectivesLast, 1, 2), objectivesFirst),
+    )
+
+    const objectivesDriftRange = grid(dashboardId, objectivesFirst - 1, objectivesLast, 4, 5)
+    for (const [type, hex] of [
+      ['NUMBER_GREATER', PALETTE.positive],
+      ['NUMBER_LESS', PALETTE.negative],
+    ] as const) {
+      requests.push({
+        addConditionalFormatRule: {
+          rule: {
+            ranges: [objectivesDriftRange],
+            booleanRule: {
+              condition: { type, values: [{ userEnteredValue: '0' }] },
+              format: { textFormat: { bold: true, foregroundColor: rgb(hex) } },
+            },
+          },
+        },
+      })
+    }
+
+    actions.push('Painel estilizado: totais em destaque, alocação por classe e por objetivo, e tabela de ativos')
   }
 
   // --- Grade off: com listras e bordas ela vira ruído --------------------

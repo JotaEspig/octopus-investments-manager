@@ -10,10 +10,18 @@
  * `migrations.ts` — o instalador se recusa a passar por cima de dados gravados.
  */
 
-import { ASSET_CLASSES, ASSET_CLASS_LABELS, type AssetClass, type Currency } from '@/domain/types'
+import {
+  ASSET_CLASSES,
+  ASSET_CLASS_LABELS,
+  OBJECTIVES,
+  OBJECTIVE_LABELS,
+  type AssetClass,
+  type Currency,
+  type Objective,
+} from '@/domain/types'
 
 /** Gravada em `Config`. O instalador compara e avisa quando a planilha está velha. */
-export const SCHEMA_VERSION = 5
+export const SCHEMA_VERSION = 6
 
 /**
  * Chave em `Config` com o carimbo da última execução do Apps Script.
@@ -307,13 +315,17 @@ export const TRADES_SHEET: DataSheetSpec = {
 
 export const ASSETS_SHEET: DataSheetSpec = {
   title: SHEET.assets,
-  writableColumns: 5,
+  writableColumns: 6,
   columns: [
     { key: 'symbol', header: 'Ativo', width: 110 },
     { key: 'name', header: 'Nome', width: 240 },
     { key: 'assetClass', header: 'Classe', width: 120 },
     { key: 'currency', header: 'Moeda', width: 70 },
     { key: 'broker', header: 'Corretora', width: 120 },
+    // Coluna nova no fim (v6): finalidade do ativo, independente da classe.
+    // Vazia em ativo cadastrado antes desta coluna existir — nunca preenchida
+    // retroativamente por suposição.
+    { key: 'objective', header: 'Objetivo', width: 170 },
   ],
 }
 
@@ -337,6 +349,15 @@ export const FIXED_INCOME_SHEET: DataSheetSpec = {
     { key: 'fgc', header: 'FGC', width: 70 },
     { key: 'marketValue', header: 'Valor bruto (R$)', format: 'brl', width: 140 },
     { key: 'updatedAt', header: 'Marcado em', format: 'datetime', width: 150 },
+    /**
+     * Coluna nova no fim (v6), DEPOIS das duas que o Apps Script possui.
+     * `apps-script/Code.gs` lê e escreve `Contratos RF` por índice fixo
+     * (`readRows(contractSheet, 11)`, `getRange(2, 10, …)`) — colocar
+     * `objective` aqui, depois delas, é o que garante que ele nunca a vê nem
+     * a pisa. Escrita própria em `repositories.ts` via célula avulsa, não pelo
+     * `writableColumns` contíguo (que termina em `fgc`).
+     */
+    { key: 'objective', header: 'Objetivo', width: 170 },
   ],
 }
 
@@ -411,6 +432,16 @@ export const DATA_SHEETS: DataSheetSpec[] = [
  * EUA porque a carteira não tem classe "caixa" — a reserva de oportunidade não
  * aparece na pizza enquanto não estiver alocada.
  */
+/**
+ * Prefixo das chaves de meta de alocação POR OBJETIVO em `Config`.
+ *
+ * Precisa ser um prefixo distinto de `TARGET_KEY_PREFIX` (`target_`), e
+ * checado ANTES dele na leitura (`repositories.ts`): `target_goal_x` também
+ * começa com `target_`, então checar a ordem errada classificaria a meta de
+ * objetivo como se fosse meta de classe.
+ */
+export const TARGET_GOAL_KEY_PREFIX = 'target_goal_'
+
 export const CONFIG_ROWS: Array<{ key: string; value: string; description: string }> = [
   {
     key: 'schema_version',
@@ -427,6 +458,11 @@ export const CONFIG_ROWS: Array<{ key: string; value: string; description: strin
   { key: 'target_us_stock', value: '0,20', description: 'Meta de alocação — Ações EUA (satélite).' },
   { key: 'target_br_stock', value: '0', description: 'Meta de alocação — Ações Brasil.' },
   { key: 'target_br_fii', value: '0', description: 'Meta de alocação — FIIs.' },
+  ...OBJECTIVES.map((objective) => ({
+    key: `${TARGET_GOAL_KEY_PREFIX}${objective}`,
+    value: '0',
+    description: `Meta de alocação por objetivo — ${OBJECTIVE_LABELS[objective]}.`,
+  })),
   {
     key: APPS_SCRIPT_LAST_RUN,
     value: '',
@@ -496,6 +532,9 @@ const TOTAL_HEADER = 'Valor (R$)'
 
 /** Participação do ativo dentro da própria classe — o que você pediu ver. */
 const CLASS_SHARE_HEADER = '% da classe'
+
+/** Objetivo do ativo, projetado de `Ativos`/`Contratos RF` — usado para somar por objetivo no Painel. */
+const OBJECTIVE_HEADER = 'Objetivo'
 
 const trades = (range: string) => ref(SHEET.trades, range)
 const assets = (range: string) => ref(SHEET.assets, range)
@@ -601,6 +640,15 @@ function marketColumns(assetClass: AssetClass): ViewColumnSpec[] {
       width: 110,
       formula: (row) => guarded(row, `IFERROR($K${row}/${TOTAL_RANGE_NAME[assetClass]};0)`),
     },
+    {
+      // Acrescentada NO FIM de propósito: todo formula() anterior nesta lista
+      // referencia coluna por letra literal ($C, $G, $K…); inserir no meio
+      // deslocaria todas elas. O Painel soma esta coluna por objetivo — ver
+      // `objectiveTotalFormula`.
+      header: OBJECTIVE_HEADER,
+      width: 170,
+      formula: (row) => guarded(row, `IFERROR(VLOOKUP($A${row};${assets('$A:$F')};6;FALSE);"")`),
+    },
   ]
 }
 
@@ -679,6 +727,14 @@ const fixedIncomeColumns: ViewColumnSpec[] = [
     width: 110,
     formula: (row) => guarded(row, `IFERROR($K${row}/${TOTAL_RANGE_NAME.fixed_income};0)`),
   },
+  {
+    // Acrescentada no fim pelo mesmo motivo de `marketColumns`. `Contratos RF`
+    // guarda `objective` na coluna L (depois de `marketValue`/`updatedAt`, que
+    // são do Apps Script) — ver o comentário em `FIXED_INCOME_SHEET`.
+    header: OBJECTIVE_HEADER,
+    width: 170,
+    formula: (row) => guarded(row, `IFERROR(VLOOKUP($A${row};${contracts('$A:$L')};12;FALSE);"")`),
+  },
 ]
 
 export const VIEW_SHEETS: ViewSheetSpec[] = ASSET_CLASSES.map((assetClass) => {
@@ -716,19 +772,47 @@ export const DASHBOARD = {
   privacyLabelColumn: 5,
   /** Coluna (0-based) do checkbox em si. */
   privacyCheckboxColumn: 6,
-  /** Linha do cabeçalho da tabela de alocação. */
+  /** Linha do cabeçalho da tabela de alocação por classe. */
   allocationHeaderRow: 7,
   /** Primeira linha de classe. */
   allocationFirstRow: 8,
-  /** Linha onde os gráficos são ancorados. */
-  chartRow: 15,
-  /** A tabela de ativos vem depois dos gráficos, que ocupam ~18 linhas. */
-  assetsTitleRow: 34,
-  assetsHeaderRow: 35,
-  assetsFirstRow: 36,
+  /**
+   * Tabela de alocação por OBJETIVO — logo ABAIXO da de classe (mesma
+   * largura de 5 colunas, A:E), com uma linha em branco entre as duas.
+   * `allocationFirstRow` tem 5 linhas de classe (8–12); esta começa na 14
+   * para deixar a 13 como respiro.
+   */
+  objectivesHeaderRow: 14,
+  objectivesFirstRow: 15,
+  /**
+   * Tabela de ativos — logo abaixo da de objetivo, mesma coluna (A:D). Os
+   * gráficos NÃO ficam nesta coluna (ver `chartsColumn` abaixo), então a
+   * tabela de ativos não precisa reservar espaço vertical pra eles: vem
+   * direto depois da tabela de objetivo (que termina na 21) mais uma linha
+   * de respiro.
+   */
+  assetsTitleRow: 23,
+  assetsHeaderRow: 24,
+  assetsFirstRow: 25,
+  /**
+   * Coluna (0-based) onde os dois gráficos ficam, empilhados à DIREITA das
+   * tabelas — pizza de alocação em cima, linha de patrimônio embaixo. Longe
+   * de A:E (as tabelas) e de F/G (controle de privacidade, linha 1 só).
+   */
+  chartsColumn: 6,
+  /** Linha de âncora da pizza de alocação — alinhada com o bloco de totais. */
+  allocationChartRow: 3,
+  /**
+   * Linha de âncora do histórico, abaixo da pizza. O gap replica a folga que
+   * o layout anterior já usava entre o topo do gráfico e o que vinha depois
+   * (~19 linhas) — suficiente pro tamanho padrão de gráfico do Sheets.
+   */
+  historyChartRow: 22,
 } as const
 
 export const DASHBOARD_ALLOCATION_HEADERS = ['Classe', 'Valor (R$)', '% atual', 'Meta', 'Desvio']
+
+export const DASHBOARD_OBJECTIVE_HEADERS = ['Objetivo', 'Valor (R$)', '% atual', 'Meta', 'Desvio']
 
 /** Participação do ativo no patrimônio total, não na classe. */
 const PORTFOLIO_SHARE_HEADER = '% da carteira'
@@ -776,6 +860,40 @@ export const NAMED_RANGE = {
   total: 'PATRIMONIO_TOTAL',
 } as const
 
+/**
+ * Total em BRL de um objetivo, somado através das cinco abas de classe.
+ *
+ * Ao contrário do total por classe (que tem intervalo nomeado próprio, porque
+ * é a soma de UMA aba), o objetivo cruza as classes — o mesmo objetivo aparece
+ * em ações, ETFs e renda fixa. Por isso é um SUMIF por aba, somados: cada aba
+ * já projeta o objetivo do ativo na coluna "Objetivo" (`OBJECTIVE_HEADER`,
+ * sempre a última — ver `marketColumns`/`fixedIncomeColumns`) e a coluna
+ * "Valor (R$)" continua em `$K`, intocada pela adição.
+ */
+export function objectiveTotalFormula(objective: Objective): string {
+  const lastRow = VIEW_FIRST_ROW + VIEW_ROWS - 1
+  const terms = VIEW_SHEETS.map((spec) => {
+    const objectiveColumn = columnLetterOfSchema(
+      spec.columns.findIndex((column) => column.header === OBJECTIVE_HEADER),
+    )
+    const objectiveRange = ref(spec.title, `$${objectiveColumn}$${VIEW_FIRST_ROW}:$${objectiveColumn}$${lastRow}`)
+    const valueRange = ref(spec.title, `$K$${VIEW_FIRST_ROW}:$K$${lastRow}`)
+    return `SUMIF(${objectiveRange};"${objective}";${valueRange})`
+  })
+  return `=${terms.join('+')}`
+}
+
+/** Duplicada de `bootstrap.columnLetter` de propósito: importar de lá criaria ciclo. */
+function columnLetterOfSchema(index: number): string {
+  let letter = ''
+  let value = index
+  while (value >= 0) {
+    letter = String.fromCharCode((value % 26) + 65) + letter
+    value = Math.floor(value / 26) - 1
+  }
+  return letter
+}
+
 /** Quantas linhas do histórico os gráficos cobrem (12 meses folgados). */
 export const HISTORY_CHART_ROWS = 60
 
@@ -785,3 +903,6 @@ export const HISTORY_CHART_ROWS = 60
  * esconder o eixo Y quando o modo privacidade liga.
  */
 export const HISTORY_CHART_TITLE = 'Patrimônio — últimos meses'
+
+/** Título do gráfico de pizza — usado para achá-lo de novo e reposicioná-lo a cada instalação. */
+export const CLASS_ALLOCATION_CHART_TITLE = 'Alocação por classe'

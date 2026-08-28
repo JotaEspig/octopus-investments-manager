@@ -3,9 +3,12 @@ import { costBasis, groupBySymbol } from './average-cost'
 import {
   ASSET_CLASSES,
   ASSET_CLASS_LABELS,
+  OBJECTIVES,
+  OBJECTIVE_LABELS,
   type Asset,
   type AssetClass,
   type FixedIncomeContract,
+  type Objective,
   type PortfolioSummary,
   type Position,
   type Trade,
@@ -36,6 +39,8 @@ export interface PortfolioInput {
   contracts: readonly FixedIncomeContract[]
   /** Metas de alocação lidas de `Config`, como fração. */
   targets: ReadonlyMap<AssetClass, number>
+  /** Metas de alocação POR OBJETIVO lidas de `Config`, como fração. */
+  objectiveTargets: ReadonlyMap<Objective, number>
 }
 
 export function buildPositions(input: PortfolioInput): Position[] {
@@ -75,6 +80,7 @@ export function buildPositions(input: PortfolioInput): Position[] {
       symbol,
       name: asset?.name ?? contract?.name ?? symbol,
       assetClass,
+      objective: asset?.objective ?? contract?.objective ?? '',
       currency,
       quantity: basis.quantity,
       avgPriceNative: basis.avgPriceNative,
@@ -106,10 +112,18 @@ export function buildSummary(
   positions: readonly Position[],
   targets: ReadonlyMap<AssetClass, number>,
   updatedAt: string,
+  objectiveTargets: ReadonlyMap<Objective, number> = new Map(),
 ): PortfolioSummary {
   const totals = new Map<AssetClass, number>()
+  const objectiveTotals = new Map<Objective, number>()
   for (const position of positions) {
     totals.set(position.assetClass, (totals.get(position.assetClass) ?? 0) + position.marketValueBRL)
+    if (position.objective) {
+      objectiveTotals.set(
+        position.objective,
+        (objectiveTotals.get(position.objective) ?? 0) + position.marketValueBRL,
+      )
+    }
   }
 
   const totalBRL = roundMoney([...totals.values()].reduce((sum, value) => sum + value, 0))
@@ -123,6 +137,19 @@ export function buildSummary(
       return {
         assetClass,
         label: ASSET_CLASS_LABELS[assetClass],
+        valueBRL,
+        share,
+        target,
+        drift: target === null ? null : share - target,
+      }
+    }),
+    byObjective: OBJECTIVES.map((objective) => {
+      const valueBRL = roundMoney(objectiveTotals.get(objective) ?? 0)
+      const share = safeDivide(valueBRL, totalBRL)
+      const target = objectiveTargets.get(objective) ?? null
+      return {
+        objective,
+        label: OBJECTIVE_LABELS[objective],
         valueBRL,
         share,
         target,

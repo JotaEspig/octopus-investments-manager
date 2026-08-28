@@ -6,11 +6,14 @@ import {
   ASSET_CLASS_LABELS,
   FIXED_INCOME_INDEXER_LABELS,
   FIXED_INCOME_INDEXERS,
+  OBJECTIVES,
+  OBJECTIVE_LABELS,
   TRADE_KIND_LABELS,
   type Asset,
   type AssetClass,
   type Currency,
   type FixedIncomeIndexer,
+  type Objective,
   type TradeKind,
 } from '@/domain/types'
 import { today } from '@/lib/dates'
@@ -45,6 +48,23 @@ const CURRENCY_OF_CLASS: Record<AssetClass, Currency> = {
   br_stock: 'BRL',
   br_fii: 'BRL',
   fixed_income: 'BRL',
+}
+
+/**
+ * Sugestão automática de objetivo, por classe ou por indexador — mas nunca
+ * travada: o campo continua um `<Select>` comum, e estes mapas só decidem o
+ * valor inicial quando a classe/indexador muda. `systemic_protection`,
+ * `growth` e `speculative` nunca aparecem aqui de propósito: não têm uma
+ * origem automática, sempre exigem escolha manual.
+ */
+const OBJECTIVE_OF_CLASS: Partial<Record<AssetClass, Objective>> = {
+  br_fii: 'passive_income',
+}
+
+const OBJECTIVE_OF_INDEXER: Record<FixedIncomeIndexer, Objective> = {
+  cdi: 'liquidity',
+  prefixed: 'predictable_yield',
+  ipca: 'inflation_protection',
 }
 
 /** Rótulos que fazem sentido para cada natureza. */
@@ -87,6 +107,12 @@ interface FormState {
    */
   newClass: AssetClass | ''
   newBroker: string
+  /**
+   * Sugerido automaticamente quando a classe tem regra (FII), mas sempre
+   * editável — nunca fica travado, e a sugestão não muda sozinha depois que o
+   * usuário mexe na classe de novo.
+   */
+  newObjective: Objective | ''
   contractSymbol: string
   contractName: string
   contractIssuer: string
@@ -96,6 +122,8 @@ interface FormState {
   contractMaturity: string
   contractLiquidity: boolean
   contractFgc: boolean
+  /** Sugerido pelo indexador (CDI/prefixado/IPCA+), mas sempre editável. */
+  contractObjective: Objective | ''
 }
 
 const INITIAL: FormState = {
@@ -111,6 +139,7 @@ const INITIAL: FormState = {
   newSymbol: '',
   newName: '',
   newClass: '',
+  newObjective: '',
   newBroker: '',
   contractSymbol: '',
   contractName: '',
@@ -120,6 +149,7 @@ const INITIAL: FormState = {
   contractMaturity: '',
   contractLiquidity: false,
   contractFgc: true,
+  contractObjective: OBJECTIVE_OF_INDEXER.cdi,
 }
 
 /** `CDB Banco XP 2028` → `RF-CDB-BANCO-XP-2028`, sem acento. */
@@ -171,6 +201,19 @@ export function TradeForm({ assets, contracts, onSubmitted }: TradeFormProps) {
   useEffect(() => {
     if (!kinds.includes(form.kind)) set('kind', 'buy')
   }, [form.kind, kinds])
+
+  // Sugere o objetivo pela classe (hoje só FII → Renda passiva). Continua
+  // editável: isto só decide o valor inicial quando a classe muda de novo.
+  useEffect(() => {
+    const suggested = form.newClass ? OBJECTIVE_OF_CLASS[form.newClass] : undefined
+    if (suggested) set('newObjective', suggested)
+  }, [form.newClass])
+
+  // Sugere o objetivo pelo indexador — CDI, prefixado e IPCA+ mapeiam 1 para
+  // 1, mas o campo continua editável depois.
+  useEffect(() => {
+    set('contractObjective', OBJECTIVE_OF_INDEXER[form.contractIndexer])
+  }, [form.contractIndexer])
 
   // PTAX buscada ao mudar data ou moeda; o campo segue editável porque a do
   // próprio dia só sai à tarde e o câmbio da corretora não é a PTAX.
@@ -226,6 +269,7 @@ export function TradeForm({ assets, contracts, onSubmitted }: TradeFormProps) {
                 maturity: form.contractMaturity,
                 dailyLiquidity: form.contractLiquidity,
                 fgc: form.contractFgc,
+                objective: form.contractObjective,
               },
             }
           : {}),
@@ -253,6 +297,7 @@ export function TradeForm({ assets, contracts, onSubmitted }: TradeFormProps) {
               assetClass: form.newClass,
               currency,
               broker: form.newBroker,
+              objective: form.newObjective,
             },
           }
         : {}),
@@ -400,6 +445,26 @@ export function TradeForm({ assets, contracts, onSubmitted }: TradeFormProps) {
               required
             />
           </Field>
+          <Field
+            label="Objetivo"
+            hint="Para que serve na carteira — independente da classe"
+            error={errors['newAsset.objective']}
+          >
+            <Select
+              value={form.newObjective}
+              onChange={(event) => set('newObjective', event.target.value as Objective | '')}
+              required
+            >
+              <option value="" disabled>
+                Selecione…
+              </option>
+              {OBJECTIVES.map((objective) => (
+                <option key={objective} value={objective}>
+                  {OBJECTIVE_LABELS[objective]}
+                </option>
+              ))}
+            </Select>
+          </Field>
         </fieldset>
       ) : null}
 
@@ -461,6 +526,26 @@ export function TradeForm({ assets, contracts, onSubmitted }: TradeFormProps) {
               value={form.contractSymbol}
               onChange={(event) => set('contractSymbol', event.target.value.toUpperCase())}
             />
+          </Field>
+          <Field
+            label="Objetivo"
+            hint="Sugerido pelo indexador — pode trocar"
+            error={errors['newContract.objective']}
+          >
+            <Select
+              value={form.contractObjective}
+              onChange={(event) => set('contractObjective', event.target.value as Objective | '')}
+              required
+            >
+              <option value="" disabled>
+                Selecione…
+              </option>
+              {OBJECTIVES.map((objective) => (
+                <option key={objective} value={objective}>
+                  {OBJECTIVE_LABELS[objective]}
+                </option>
+              ))}
+            </Select>
           </Field>
           <div className="flex items-center gap-5 sm:col-span-2">
             <label className="flex items-center gap-2 text-sm">

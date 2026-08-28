@@ -1,11 +1,13 @@
 import type { sheets_v4 } from 'googleapis'
-import { ASSET_CLASSES, ASSET_CLASS_LABELS } from '@/domain/types'
+import { ASSET_CLASSES, ASSET_CLASS_LABELS, OBJECTIVES, OBJECTIVE_LABELS } from '@/domain/types'
 import {
+  CLASS_ALLOCATION_CHART_TITLE,
   CONFIG_FX_ROW,
   CONFIG_ROWS,
   DASHBOARD,
   DASHBOARD_ALLOCATION_HEADERS,
   DASHBOARD_ASSETS_HEADERS,
+  DASHBOARD_OBJECTIVE_HEADERS,
   DATA_SHEETS,
   DIALECT_PROBE,
   DIALECT_PROBE_EXPECTED,
@@ -21,6 +23,7 @@ import {
   VIEW_SHEETS,
   dashboardAssetsFormula,
   localizeValue,
+  objectiveTotalFormula,
   ref,
   type DataSheetSpec,
   type FormulaDialect,
@@ -147,6 +150,22 @@ function dashboardContent(): ValueRange[] {
     ]
   })
 
+  // Tabela de objetivo, logo ABAIXO da de classe — mesma largura (A:E), uma
+  // linha em branco entre as duas (ver `DASHBOARD.objectivesHeaderRow`).
+  const objFirstRow = DASHBOARD.objectivesFirstRow
+  const objLastRow = objFirstRow + OBJECTIVES.length - 1
+
+  const objectiveRows = OBJECTIVES.map((objective, index) => {
+    const row = objFirstRow + index
+    return [
+      OBJECTIVE_LABELS[objective],
+      objectiveTotalFormula(objective),
+      `=IFERROR($B${row}/$B$${DASHBOARD.totalRow};0)`,
+      `=IFERROR(VLOOKUP("target_goal_${objective}";${ref(SHEET.config, '$A:$B')};2;FALSE);0)`,
+      `=$C${row}-$D${row}`,
+    ]
+  })
+
   return [
     { range: ref(DASHBOARD.title, 'A1'), values: [['Carteira']] },
     {
@@ -178,6 +197,11 @@ function dashboardContent(): ValueRange[] {
     },
     { range: ref(DASHBOARD.title, `A${firstRow}:E${lastRow}`), values: allocationRows },
     {
+      range: ref(DASHBOARD.title, `A${DASHBOARD.objectivesHeaderRow}:E${DASHBOARD.objectivesHeaderRow}`),
+      values: [DASHBOARD_OBJECTIVE_HEADERS],
+    },
+    { range: ref(DASHBOARD.title, `A${objFirstRow}:E${objLastRow}`), values: objectiveRows },
+    {
       range: ref(DASHBOARD.title, `A${DASHBOARD.assetsTitleRow}`),
       values: [['Ativos — participação dentro da própria classe']],
     },
@@ -196,7 +220,20 @@ function dashboardContent(): ValueRange[] {
 // Gráficos
 // ---------------------------------------------------------------------------
 
-function chartRequests(dashboardId: number, historyId: number): sheets_v4.Schema$Request[] {
+export interface ChartDefinition {
+  title: string
+  /** Linha (1-based) de âncora — a coluna é sempre `DASHBOARD.chartsColumn`. */
+  anchorRow: number
+  spec: sheets_v4.Schema$ChartSpec
+}
+
+/**
+ * As especificações dos dois gráficos do Painel, SEM posição — a posição é
+ * decidida por quem chama (`bootstrapSpreadsheet`), que precisa saber se vai
+ * criar (`addChart`) ou só mover um gráfico já existente
+ * (`updateEmbeddedObjectPosition`).
+ */
+function chartDefinitions(dashboardId: number, historyId: number): ChartDefinition[] {
   const firstRow = DASHBOARD.allocationFirstRow
   const lastRow = firstRow + ASSET_CLASSES.length
 
@@ -210,63 +247,49 @@ function chartRequests(dashboardId: number, historyId: number): sheets_v4.Schema
 
   return [
     {
-      addChart: {
-        chart: {
-          spec: {
-            title: 'Alocação por classe',
-            pieChart: {
-              legendPosition: 'RIGHT_LEGEND',
-              domain: {
-                sourceRange: { sources: [gridRange(dashboardId, firstRow - 1, lastRow - 1, 0, 1)] },
-              },
-              series: {
-                sourceRange: { sources: [gridRange(dashboardId, firstRow - 1, lastRow - 1, 1, 2)] },
-              },
-            },
+      title: CLASS_ALLOCATION_CHART_TITLE,
+      anchorRow: DASHBOARD.allocationChartRow,
+      spec: {
+        title: CLASS_ALLOCATION_CHART_TITLE,
+        pieChart: {
+          legendPosition: 'RIGHT_LEGEND',
+          domain: {
+            sourceRange: { sources: [gridRange(dashboardId, firstRow - 1, lastRow - 1, 0, 1)] },
           },
-          position: {
-            overlayPosition: {
-              anchorCell: { sheetId: dashboardId, rowIndex: DASHBOARD.chartRow - 1, columnIndex: 0 },
-            },
+          series: {
+            sourceRange: { sources: [gridRange(dashboardId, firstRow - 1, lastRow - 1, 1, 2)] },
           },
         },
       },
     },
     {
-      addChart: {
-        chart: {
-          spec: {
-            title: HISTORY_CHART_TITLE,
-            basicChart: {
-              chartType: 'LINE',
-              legendPosition: 'BOTTOM_LEGEND',
-              headerCount: 1,
-              axis: [
-                { position: 'BOTTOM_AXIS', title: 'Mês' },
-                { position: 'LEFT_AXIS', title: 'R$' },
-              ],
-              domains: [
-                {
-                  domain: {
-                    sourceRange: { sources: [gridRange(historyId, 0, HISTORY_CHART_ROWS, 0, 1)] },
-                  },
-                },
-              ],
-              series: [
-                {
-                  series: {
-                    sourceRange: { sources: [gridRange(historyId, 0, HISTORY_CHART_ROWS, 1, 2)] },
-                  },
-                  targetAxis: 'LEFT_AXIS',
-                },
-              ],
+      title: HISTORY_CHART_TITLE,
+      anchorRow: DASHBOARD.historyChartRow,
+      spec: {
+        title: HISTORY_CHART_TITLE,
+        basicChart: {
+          chartType: 'LINE',
+          legendPosition: 'BOTTOM_LEGEND',
+          headerCount: 1,
+          axis: [
+            { position: 'BOTTOM_AXIS', title: 'Mês' },
+            { position: 'LEFT_AXIS', title: 'R$' },
+          ],
+          domains: [
+            {
+              domain: {
+                sourceRange: { sources: [gridRange(historyId, 0, HISTORY_CHART_ROWS, 0, 1)] },
+              },
             },
-          },
-          position: {
-            overlayPosition: {
-              anchorCell: { sheetId: dashboardId, rowIndex: DASHBOARD.chartRow - 1, columnIndex: 6 },
+          ],
+          series: [
+            {
+              series: {
+                sourceRange: { sources: [gridRange(historyId, 0, HISTORY_CHART_ROWS, 1, 2)] },
+              },
+              targetAxis: 'LEFT_AXIS',
             },
-          },
+          ],
         },
       },
     },
@@ -438,10 +461,43 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
   )
 
   // --- 5. Conteúdo --------------------------------------------------------
+
+  // O Painel é 100% derivado — a ÚNICA célula com estado que é do usuário é o
+  // checkbox de privacidade. Por isso ele é lido ANTES de limpar, pra poder
+  // ser restaurado depois: sem isso, o `values.clear` abaixo apagaria o
+  // estado que a pessoa escolheu.
+  const privacyCell = ref(
+    DASHBOARD.title,
+    `${columnLetter(DASHBOARD.privacyCheckboxColumn)}${DASHBOARD.privacyRow}`,
+  )
+  let privacyValue: unknown = false
+  try {
+    const existingPrivacy = await api.spreadsheets.values.get({ spreadsheetId, range: privacyCell })
+    const current = existingPrivacy.data.values?.[0]?.[0]
+    if (current !== undefined && current !== null && current !== '') privacyValue = current
+  } catch {
+    // Aba recém-criada: fica no padrão (desligado).
+  }
+
+  // Limpa o Painel por inteiro antes de reescrever. Sem isso, uma posição de
+  // tabela que muda de versão pra versão (como aconteceu aqui — a tabela de
+  // ativos já esteve em três linhas diferentes) deixa a escrita antiga presa
+  // no meio da nova: sobra texto onde uma fórmula tenta "derramar" pra baixo,
+  // e ela quebra com `#REF!` em vez de crescer. As outras abas (dados e
+  // classe) não precisam disso porque só crescem no fim; o Painel, que reflui
+  // de cima a baixo, precisa. Formatação e gráficos não são afetados —
+  // `values.clear` só mexe em valor de célula.
+  const dashboardExists = sheetsByTitle.has(DASHBOARD.title)
+  if (dashboardExists) {
+    await api.spreadsheets.values.clear({ spreadsheetId, range: DASHBOARD.title, requestBody: {} })
+    actions.push('Painel limpo antes de reescrever (evita sobra de layout de versão anterior)')
+  }
+
   const valueRanges: ValueRange[] = [
     ...DATA_SHEETS.map(dataSheetHeader),
     ...VIEW_SHEETS.flatMap(viewSheetContent),
     ...dashboardContent(),
+    { range: privacyCell, values: [[privacyValue]] },
   ]
 
   // `Config` guarda as metas de alocação, que são suas para editar: só as
@@ -457,25 +513,6 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
     }
   } catch {
     // Aba recém-criada: nada configurado ainda.
-  }
-
-  // Checkbox do modo privacidade: só recebe o valor inicial se ainda estiver
-  // vazio. É o mesmo motivo de `Config` só escrever chaves ausentes — uma
-  // reinstalação não pode apagar o estado que o usuário já escolheu.
-  const privacyCell = ref(
-    DASHBOARD.title,
-    `${columnLetter(DASHBOARD.privacyCheckboxColumn)}${DASHBOARD.privacyRow}`,
-  )
-  try {
-    const existingPrivacy = await api.spreadsheets.values.get({ spreadsheetId, range: privacyCell })
-    const current = existingPrivacy.data.values?.[0]?.[0]
-    if (current === undefined || current === null || current === '') {
-      valueRanges.push({ range: privacyCell, values: [[false]] })
-      actions.push('Painel: checkbox de modo privacidade criado (desligado)')
-    }
-  } catch {
-    valueRanges.push({ range: privacyCell, values: [[false]] })
-    actions.push('Painel: checkbox de modo privacidade criado (desligado)')
   }
 
   const missingConfig = CONFIG_ROWS.filter((row) => !configured.has(row.key))
@@ -580,15 +617,44 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
     })
   }
 
-  // Gráficos: só na primeira vez. Recriar apagaria ajustes manuais.
+  // Gráficos: posição é reafirmada em TODA instalação, ao contrário do resto
+  // desta seção (que só cria uma vez e nunca mais toca). É uma exceção
+  // deliberada — o layout do Painel muda de vez em quando, e um gráfico preso
+  // na posição de uma versão antiga do schema é pior do que perder um ajuste
+  // manual de posição. Encontra pelo TÍTULO (`chart.spec?.title`), o mesmo que
+  // `apps-script/Code.gs` usa para achar o gráfico de patrimônio — então
+  // mudar a posição aqui não quebra a lógica de lá.
   const dashboardCharts = sheetsByTitle.get(DASHBOARD.title)?.charts ?? []
   const dashboardId = sheetId(DASHBOARD.title)
   const historyId = sheetId(SHEET.history)
-  if (dashboardCharts.length === 0 && dashboardId !== null && historyId !== null) {
-    structureRequests.push(...chartRequests(dashboardId, historyId))
-    actions.push('Gráficos criados: pizza de alocação e linha do patrimônio')
-  } else if (dashboardCharts.length > 0) {
-    actions.push(`Gráficos preservados (${dashboardCharts.length} já existiam)`)
+  if (dashboardId !== null && historyId !== null) {
+    for (const definition of chartDefinitions(dashboardId, historyId)) {
+      const anchorCell = {
+        sheetId: dashboardId,
+        rowIndex: definition.anchorRow - 1,
+        columnIndex: DASHBOARD.chartsColumn,
+      }
+      const existing = dashboardCharts.find((chart) => chart.spec?.title === definition.title)
+
+      if (existing?.chartId != null) {
+        structureRequests.push({
+          updateEmbeddedObjectPosition: {
+            objectId: existing.chartId,
+            newPosition: { overlayPosition: { anchorCell } },
+            // Relativo a OverlayPosition, não a EmbeddedObjectPosition — o
+            // prefixo "overlayPosition." é implícito e a API rejeita se ele
+            // vier explícito (medido: "Invalid field: overlay_position").
+            fields: 'anchorCell',
+          },
+        })
+        actions.push(`Gráfico reposicionado: ${definition.title}`)
+      } else {
+        structureRequests.push({
+          addChart: { chart: { spec: definition.spec, position: { overlayPosition: { anchorCell } } } },
+        })
+        actions.push(`Gráfico criado: ${definition.title}`)
+      }
+    }
   }
 
   for (const [index, title] of order.entries()) {

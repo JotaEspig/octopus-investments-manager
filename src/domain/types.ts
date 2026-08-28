@@ -19,6 +19,36 @@ export const CURRENCIES = ['BRL', 'USD'] as const
 export type Currency = (typeof CURRENCIES)[number]
 
 /**
+ * Objetivo do ativo — segunda dimensão de classificação, independente da
+ * classe. Cadastrado no ativo (não na operação): um ativo pertence a
+ * exatamente um objetivo.
+ *
+ * Planilhas anteriores a esta funcionalidade não têm o dado: `''` é "ainda não
+ * classificado", nunca um oitavo objetivo — não preencher em massa por
+ * suposição.
+ */
+export const OBJECTIVES = [
+  'liquidity',
+  'passive_income',
+  'inflation_protection',
+  'predictable_yield',
+  'systemic_protection',
+  'growth',
+  'speculative',
+] as const
+export type Objective = (typeof OBJECTIVES)[number]
+
+export const OBJECTIVE_LABELS: Record<Objective, string> = {
+  liquidity: 'Liquidez / Reserva',
+  passive_income: 'Renda passiva',
+  inflation_protection: 'Proteção — inflação',
+  predictable_yield: 'Previsibilidade de fluxo',
+  systemic_protection: 'Proteção — sistêmica/moeda',
+  growth: 'Crescimento / valorização',
+  speculative: 'Assimétrico / especulativo',
+}
+
+/**
  * Tipos de operação.
  * - `buy`/`sell`  — movimentam posição e custo médio
  * - `dividend`    — provento em dinheiro de renda variável
@@ -75,6 +105,8 @@ export interface Asset {
   assetClass: AssetClass
   currency: Currency
   broker: string
+  /** `''` em ativos cadastrados antes desta coluna existir. */
+  objective: Objective | ''
 }
 
 /** Contrato de renda fixa. Não tem cotação — é marcado na curva. */
@@ -101,6 +133,8 @@ export interface FixedIncomeContract {
    * é o único campo da planilha que o código do app não calcula.
    */
   marketValue: number
+  /** `''` em contratos cadastrados antes desta coluna existir. */
+  objective: Objective | ''
 }
 
 /**
@@ -142,6 +176,8 @@ export interface Position {
   symbol: string
   name: string
   assetClass: AssetClass
+  /** `''` quando o ativo/contrato ainda não foi classificado por objetivo. */
+  objective: Objective | ''
   currency: Currency
   quantity: number
   /** Preço médio na moeda do ativo (regra da RFB: venda não o altera). */
@@ -175,6 +211,19 @@ export interface PortfolioSummary {
     /** Meta definida na aba `Config`, se houver. */
     target: number | null
     /** `share - target`, em pontos percentuais fracionários. Positivo = acima da meta. */
+    drift: number | null
+  }>
+  /**
+   * Mesma forma de `byClass`, agrupado por objetivo. Posições sem objetivo
+   * classificado (`''`) ficam de fora — a soma pode não bater com `totalBRL`
+   * até que toda a carteira esteja classificada.
+   */
+  byObjective: Array<{
+    objective: Objective
+    label: string
+    valueBRL: number
+    share: number
+    target: number | null
     drift: number | null
   }>
   positionCount: number

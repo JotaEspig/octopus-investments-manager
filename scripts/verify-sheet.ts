@@ -24,7 +24,7 @@ import { loadPortfolio } from '../src/sheets/portfolio'
 import { DASHBOARD, VIEW_FIRST_ROW, VIEW_ROWS, VIEW_SHEETS, ref } from '../src/sheets/schema'
 import { columnLetter } from '../src/sheets/bootstrap'
 import { parseNumber } from '../src/lib/money'
-import type { Position } from '../src/domain/types'
+import { OBJECTIVE_LABELS, OBJECTIVES, type Position } from '../src/domain/types'
 
 loadDotenv({ path: '.env.local', quiet: true })
 
@@ -65,6 +65,10 @@ async function main() {
       ),
     ),
     ref(DASHBOARD.title, `B${DASHBOARD.totalRow}`),
+    ref(
+      DASHBOARD.title,
+      `B${DASHBOARD.objectivesFirstRow}:B${DASHBOARD.objectivesFirstRow + OBJECTIVES.length - 1}`,
+    ),
   ]
 
   const response = await context.api.spreadsheets.values.batchGet({
@@ -167,8 +171,17 @@ async function main() {
   })
 
   // 3. Total do Painel
-  const dashboardTotal = parseNumber((valueRanges.at(-1)?.values ?? [])[0]?.[0])
+  const dashboardTotal = parseNumber((valueRanges.at(-2)?.values ?? [])[0]?.[0])
   compare(DASHBOARD.title, 'patrimônio total', dashboardTotal, summary.totalBRL)
+
+  // 5. Tabela de alocação por objetivo — mesma duplicação consciente da
+  // tabela por classe, guardada pelo mesmo motivo.
+  const objectiveRows = (valueRanges.at(-1)?.values ?? []) as unknown[][]
+  OBJECTIVES.forEach((objective, index) => {
+    const sheetValue = parseNumber(objectiveRows[index]?.[0])
+    const codeValue = summary.byObjective.find((entry) => entry.objective === objective)?.valueBRL ?? 0
+    compare(`${DASHBOARD.title} · objetivo`, OBJECTIVE_LABELS[objective], sheetValue, codeValue)
+  })
 
   report(positions.length)
 }

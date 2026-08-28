@@ -5,6 +5,7 @@ import type {
   Currency,
   FixedIncomeContract,
   FixedIncomeIndexer,
+  Objective,
   Trade,
   TradeKind,
 } from '@/domain/types'
@@ -18,6 +19,7 @@ import {
   FIXED_INCOME_SHEET,
   QUOTES_SHEET,
   SHEET,
+  TARGET_GOAL_KEY_PREFIX,
   TARGET_KEY_PREFIX,
   TRADES_SHEET,
   ref,
@@ -99,6 +101,8 @@ function toAsset(row: Row): Asset | null {
     assetClass: text(row, indexOf(ASSETS_SHEET, 'assetClass')) as AssetClass,
     currency: (text(row, indexOf(ASSETS_SHEET, 'currency')) || 'BRL') as Currency,
     broker: text(row, indexOf(ASSETS_SHEET, 'broker')),
+    // '' em ativo cadastrado antes desta coluna existir — nunca um objetivo.
+    objective: text(row, indexOf(ASSETS_SHEET, 'objective')) as Objective | '',
   }
 }
 
@@ -116,6 +120,7 @@ function toContract(row: Row): FixedIncomeContract | null {
     dailyLiquidity: bool(row, indexOf(FIXED_INCOME_SHEET, 'dailyLiquidity')),
     fgc: bool(row, indexOf(FIXED_INCOME_SHEET, 'fgc')),
     marketValue: parseNumber(row[indexOf(FIXED_INCOME_SHEET, 'marketValue')]),
+    objective: text(row, indexOf(FIXED_INCOME_SHEET, 'objective')) as Objective | '',
   }
 }
 
@@ -126,6 +131,7 @@ export interface PortfolioData {
   quotes: Map<string, number>
   fxRate: number
   targets: Map<AssetClass, number>
+  objectiveTargets: Map<Objective, number>
 }
 
 /**
@@ -173,8 +179,14 @@ export async function readPortfolioData(context: SheetsContext): Promise<Portfol
   }
 
   const targets = new Map<AssetClass, number>()
+  const objectiveTargets = new Map<Objective, number>()
   for (const [key, value] of config) {
-    if (key.startsWith(TARGET_KEY_PREFIX)) {
+    // `target_goal_x` também começa com `target_` — checar o prefixo mais
+    // específico primeiro é o que impede a meta de objetivo de ser lida como
+    // se fosse meta de classe.
+    if (key.startsWith(TARGET_GOAL_KEY_PREFIX)) {
+      objectiveTargets.set(key.slice(TARGET_GOAL_KEY_PREFIX.length) as Objective, parseNumber(value))
+    } else if (key.startsWith(TARGET_KEY_PREFIX)) {
       targets.set(key.slice(TARGET_KEY_PREFIX.length) as AssetClass, parseNumber(value))
     }
   }
@@ -188,6 +200,7 @@ export async function readPortfolioData(context: SheetsContext): Promise<Portfol
     quotes,
     fxRate: parseNumber(config.get('usd_brl')) || 1,
     targets,
+    objectiveTargets,
   }
 }
 
@@ -316,6 +329,7 @@ export async function appendAsset(context: SheetsContext, input: AssetInput): Pr
     input.assetClass,
     input.currency,
     input.broker,
+    input.objective,
   ])
   await writeRow(context, QUOTES_SHEET, [
     input.symbol,
@@ -326,11 +340,34 @@ export async function appendAsset(context: SheetsContext, input: AssetInput): Pr
   return input
 }
 
+/**
+ * Escreve uma célula avulsa fora do intervalo contíguo de `writableColumns`.
+ *
+ * Existe só para `objective` em `Contratos RF`: a coluna fica depois de
+ * `marketValue`/`updatedAt`, que são do Apps Script, então não dá para incluí-
+ * la no `writeRow` de uma tacada sem sobrescrever colunas que não são nossas.
+ */
+async function writeCell(
+  context: SheetsContext,
+  spec: DataSheetSpec,
+  key: string,
+  row: number,
+  value: unknown,
+): Promise<void> {
+  const column = columnLetter(indexOf(spec, key))
+  await context.api.spreadsheets.values.update({
+    spreadsheetId: context.spreadsheetId,
+    range: ref(spec.title, `${column}${row}`),
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [[escapeSheetsFormula(value)]] as never },
+  })
+}
+
 export async function appendContract(
   context: SheetsContext,
   input: FixedIncomeInput,
 ): Promise<FixedIncomeInput> {
-  await writeRow(context, FIXED_INCOME_SHEET, [
+  const row = await writeRow(context, FIXED_INCOME_SHEET, [
     input.symbol,
     input.name,
     input.issuer,
@@ -341,6 +378,7 @@ export async function appendContract(
     input.dailyLiquidity ? 'sim' : 'não',
     input.fgc ? 'sim' : 'não',
   ])
+  await writeCell(context, FIXED_INCOME_SHEET, 'objective', row, input.objective)
   return input
 }
 
