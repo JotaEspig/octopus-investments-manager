@@ -458,11 +458,6 @@ export const CONFIG_ROWS: Array<{ key: string; value: string; description: strin
   { key: 'target_us_stock', value: '0,20', description: 'Meta de alocação — Ações EUA (satélite).' },
   { key: 'target_br_stock', value: '0', description: 'Meta de alocação — Ações Brasil.' },
   { key: 'target_br_fii', value: '0', description: 'Meta de alocação — FIIs.' },
-  ...OBJECTIVES.map((objective) => ({
-    key: `${TARGET_GOAL_KEY_PREFIX}${objective}`,
-    value: '0',
-    description: `Meta de alocação por objetivo — ${OBJECTIVE_LABELS[objective]}.`,
-  })),
   {
     key: APPS_SCRIPT_LAST_RUN,
     value: '',
@@ -477,6 +472,22 @@ export const CONFIG_ROWS: Array<{ key: string; value: string; description: strin
       'Oculta valores absolutos (R$) no Painel e nas abas de classe, mantendo percentuais. ' +
       'Ligado pelo checkbox no Painel — não edite aqui direto, o checkbox é quem escreve.',
   },
+  /**
+   * As metas por objetivo (v6) vêm DEPOIS de `privacy_mode` de propósito —
+   * nunca no meio. `CONFIG_FX_ROW`/`CONFIG_PRIVACY_ROW` (abaixo) acham a
+   * linha pelo ÍNDICE deste array, e o instalador só ACRESCENTA chave
+   * ausente no fim do que já está gravado, nunca reordena. Inserir aqui no
+   * meio (antes de `privacy_mode`) deslocaria o índice calculado para a
+   * planilha JÁ instalada, cuja `privacy_mode` continua fisicamente na
+   * linha antiga — foi exatamente esse descompasso que quebrou o modo
+   * privacidade numa instalação real (a fórmula de máscara passou a ler a
+   * meta de um objetivo, não o checkbox).
+   */
+  ...OBJECTIVES.map((objective) => ({
+    key: `${TARGET_GOAL_KEY_PREFIX}${objective}`,
+    value: '0',
+    description: `Meta de alocação por objetivo — ${OBJECTIVE_LABELS[objective]}.`,
+  })),
 ]
 
 /**
