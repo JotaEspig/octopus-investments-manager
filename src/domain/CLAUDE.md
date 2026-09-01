@@ -1,45 +1,27 @@
 # `src/domain/` — as regras de negócio
 
-**Puro, sem I/O.** Nada aqui importa de `sheets/`, `app/` ou faz rede. É o que
-permite testar tudo sem planilha, e é por isso que este diretório é a
-**autoridade** sobre os números: a planilha calcula o mesmo por fórmula para
-funcionar no celular, mas divergiu, o certo é aqui.
+Regras e comportamento estão em [`docs/domain.md`](../../docs/domain.md), não
+aqui. Este arquivo só mapeia.
 
-Toda função nova de cálculo nasce com teste. Sem exceção — é dinheiro.
+## O que tem aqui
 
-## Regras que se erra com facilidade
+| Arquivo | Responsabilidade |
+|---|---|
+| `types.ts` | `ASSET_CLASSES`, `ASSET_CLASS_LABELS`, moedas, objetivo do ativo |
+| `average-cost.ts` | Preço médio e posição a partir das operações |
+| `positions.ts` | Agrega posições por classe |
+| `fixed-income.ts` | Marcação na curva |
+| `returns.ts` | XIRR, retorno simples, nativo vs. BRL |
+| `history.ts` | `missingHistoryMonths` |
 
-**Preço médio (`average-cost.ts`).** Uma venda **não** altera o preço médio, só
-reduz a posição. Quem "recalcula a média" depois de vender apura ganho de
-capital errado. As taxas entram no custo na compra e reduzem o recebido na
-venda.
+Cada um tem seu `.test.ts` ao lado.
 
-```
-compra 10 @ 100  →  PM 100 · posição 10
-vende   5        →  PM 100 · posição  5      ← PM intocado
-compra 10 @ 200  →  PM 150 · posição 15      ← média das COMPRAS
-```
+## Pedidos comuns
 
-**Base 252, não 365 (`fixed-income.ts`).** Renda fixa usa dias ÚTEIS, convenção
-da B3. Trocar por 365 subestima o rendimento em ~30%. O calendário de dias úteis
-sai da própria série do CDI — o BCB publica uma observação por dia útil, então
-não há tabela de feriados para manter.
+**Novo tipo de ativo**: começa em `types.ts` (`ASSET_CLASSES`,
+`ASSET_CLASS_LABELS`). Depois `src/lib/schemas.ts`, `src/sheets/schema.ts` +
+`styling.ts`, `apps-script/Code.gs` (`CLASS_ORDER`), `mcp/server.ts` — ver
+tabela de pedidos comuns no `CLAUDE.md` da raiz.
 
-**IR regressivo conta dias CORRIDOS**, ao contrário da marcação. E a alíquota
-vale para o resgate inteiro: cruzar de 360 para 361 dias derruba de 20% para
-17,5% sobre TODO o ganho.
-
-**XIRR devolve `null` quando não há raiz** (`returns.ts`). Não invente número —
-quem consome trata o `null`.
-
-## Duas modelagens não óbvias
-
-**Renda fixa** não tem cotação nem quantidade natural, então a operação guarda
-`quantity` = reais aplicados e `unitPrice` = 1. Aplicar R$ 1.000 num CDB é
-`quantity: 1000, unitPrice: 1`; resgate parcial de R$ 300 é uma venda de 300.
-Assim o mesmo cálculo de custo médio serve para as duas naturezas.
-
-**Tudo vem em duas moedas.** `*Native` diz se o ATIVO foi bem; `*BRL` diz se o
-INVESTIDOR ganhou. O custo em reais usa o câmbio de **cada compra**, não o de
-hoje. Para posição em dólar a diferença costuma superar o próprio desempenho do
-ativo.
+**Nova regra de cálculo**: com teste. Se espelhada em fórmula da planilha ou em
+`apps-script/Code.gs`, atualize os dois e rode `npm run verify:sheet`.

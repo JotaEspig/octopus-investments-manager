@@ -45,3 +45,12 @@ apresentar o número como exato.
 Se adicionar ou remover uma skill, atualize a lista `SKILLS` no `install.sh` —
 ele tem pré-checagem e falha se o arquivo não existir, mas não descobre skill
 nova sozinho.
+
+## Pedidos comuns
+
+**Nova skill**: crie a pasta em `skills/`, adicione em `SKILLS` no
+`install.sh`, rode `./install.sh` e reinicie o Claude Code.
+
+**Novo campo exposto pelo MCP** (ex.: objetivo do ativo): a skill
+`carteira-mcp` precisa explicar o significado do campo novo, não só citar que
+ele existe.
