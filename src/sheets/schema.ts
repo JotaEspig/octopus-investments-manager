@@ -516,10 +516,19 @@ export const TARGET_KEY_PREFIX = 'target_'
 // Abas de apresentação
 // ---------------------------------------------------------------------------
 
+export type ColumnAlign = 'LEFT' | 'CENTER' | 'RIGHT'
+
 export interface ViewColumnSpec {
   header: string
   format?: ColumnFormat | 'native'
   width?: number
+  /**
+   * Sobrepõe o alinhamento padrão do `format` (texto à esquerda, número à
+   * direita — ver `ALIGNMENT` em `styling.ts`). Usado só quando o dado É texto
+   * mas a leitura pede alinhamento de coluna categórica, como "Objetivo" e
+   * "Moeda".
+   */
+  align?: ColumnAlign
   /** Fórmula da linha `row`. A coluna A recebe apenas a de `VIEW_FIRST_ROW`. */
   formula: (row: number) => string
 }
@@ -700,7 +709,8 @@ function marketColumns(assetClass: AssetClass): ViewColumnSpec[] {
       // deslocaria todas elas. O Painel soma esta coluna por objetivo — ver
       // `objectiveTotalFormula`.
       header: OBJECTIVE_HEADER,
-      width: 170,
+      width: 200,
+      align: 'RIGHT',
       formula: (row) =>
         guarded(row, translated(`IFERROR(VLOOKUP($A${row};${assets('$A:$F')};6;FALSE);"")`, OBJECTIVE_LABELS)),
     },
@@ -713,6 +723,7 @@ function marketColumns(assetClass: AssetClass): ViewColumnSpec[] {
     columns.push({
       header: CURRENCY_HEADER,
       width: 90,
+      align: 'RIGHT',
       formula: (row) => guarded(row, `IFERROR(${assetCurrency(row)};"")`),
     })
   }
@@ -804,7 +815,8 @@ const fixedIncomeColumns: ViewColumnSpec[] = [
     // guarda `objective` na coluna L (depois de `marketValue`/`updatedAt`, que
     // são do Apps Script) — ver o comentário em `FIXED_INCOME_SHEET`.
     header: OBJECTIVE_HEADER,
-    width: 170,
+    width: 200,
+    align: 'RIGHT',
     formula: (row) =>
       guarded(row, translated(`IFERROR(VLOOKUP($A${row};${contracts('$A:$L')};12;FALSE);"")`, OBJECTIVE_LABELS)),
   },

@@ -179,6 +179,7 @@ function columnStyle(
   firstDataRow: number,
   format: ColumnFormat | undefined,
   width: number | undefined,
+  align?: Alignment,
 ): sheets_v4.Schema$Request[] {
   const requests: sheets_v4.Schema$Request[] = []
   const resolved = format ?? 'text'
@@ -189,7 +190,7 @@ function columnStyle(
       range: grid(sheetId, firstDataRow - 1, null, columnIndex, columnIndex + 1),
       cell: {
         userEnteredFormat: {
-          horizontalAlignment: ALIGNMENT[resolved],
+          horizontalAlignment: align ?? ALIGNMENT[resolved],
           verticalAlignment: 'MIDDLE',
           ...(numberFormat ? { numberFormat } : {}),
         },
@@ -538,7 +539,7 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
             ? 'usd'
             : 'brl'
           : column.format
-      requests.push(...columnStyle(sheetId, index, VIEW_FIRST_ROW, format, column.width))
+      requests.push(...columnStyle(sheetId, index, VIEW_FIRST_ROW, format, column.width, column.align))
     }
 
     // Total da aba, na linha 1: destacado, sempre em reais.
