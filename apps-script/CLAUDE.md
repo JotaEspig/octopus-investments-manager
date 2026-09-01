@@ -6,9 +6,9 @@ aqui. Este arquivo só mapeia.
 ## O que tem aqui
 
 Um arquivo só: `Code.gs`. Contém `dailyUpdate()` e suas etapas
-(`refreshQuotes`, `fetchCdi`, `repriceFixedIncome`, `snapshotWeekly`,
-`recordLastRun`), o backfill de histórico, `onOpenSafetyNet` e os menus
-manuais (`repairQuotes()` etc.).
+(`refreshQuotes`, `fetchCdi`, `repriceFixedIncome`, `formatEtfCurrency`,
+`snapshotWeekly`, `recordLastRun`), o backfill de histórico,
+`onOpenSafetyNet` e os menus manuais (`repairQuotes()` etc.).
 
 ## Pedidos comuns
 

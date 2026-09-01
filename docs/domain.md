@@ -43,3 +43,7 @@ Assim o mesmo cálculo de custo médio serve para as duas naturezas.
 INVESTIDOR ganhou. O custo em reais usa o câmbio de **cada compra**, não o de
 hoje. Para posição em dólar a diferença costuma superar o próprio desempenho do
 ativo.
+
+Moeda é propriedade do ATIVO, nunca da classe. ETF é o exemplo: a mesma classe
+tem ativo americano (USD) e ativo listado na B3 (BRL) lado a lado — nada no
+domínio presume que uma classe inteira está numa moeda só.

@@ -7,7 +7,7 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 /**
- * Carteira consolidada. `?class=us_etf` filtra por classe.
+ * Carteira consolidada. `?class=etf` filtra por classe.
  *
  * O servidor MCP não passa por aqui — ele importa `loadPortfolio` direto, para
  * responder ao agente mesmo com o `next dev` desligado. Esta rota existe para

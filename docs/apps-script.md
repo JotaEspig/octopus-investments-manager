@@ -17,7 +17,7 @@ renda fixa sozinha.
 ## A ordem de `dailyUpdate()` importa
 
 ```
-refreshQuotes → fetchCdi → repriceFixedIncome → snapshotWeekly → recordLastRun
+refreshQuotes → fetchCdi → repriceFixedIncome → formatEtfCurrency → snapshotWeekly → recordLastRun
 ```
 
 **`refreshQuotes` vem primeiro** porque o snapshot depende das cotações. O
@@ -34,6 +34,23 @@ nessa função, **preserve as três proteções**.
 **`recordLastRun` vem por último**, e só se tudo passou: carimbo gravado após
 falha diria que está tudo bem quando não está. É ele que faz `/setup` conseguir
 dizer "não roda há 12 dias" — sem isso, gatilho quebrado é invisível.
+
+## A única aba de apresentação que o Apps Script toca
+
+`formatEtfCurrency()` aplica `US$`/`R$` célula a célula na aba "ETFs", conforme
+a moeda de cada linha. É exceção à regra geral do projeto ("abas de
+apresentação são só do TypeScript/`schema.ts`, reconstruídas pelo
+`sheet:install`"): o formato numérico de uma célula não pode depender do VALOR
+de outra no Google Sheets, e a moeda de cada linha só se sabe depois que o
+`FILTER`/`SORT` de `Ativos` calcula — código estático não tem como formatar por
+linha. Como a ordem das linhas é dinâmica (novo ETF desloca todo mundo), a
+formatação precisa ser refeita sempre que a lista muda — daí rodar dentro do
+`dailyUpdate` (uma vez por dia é suficiente) e ter item de menu próprio para
+quando não dá pra esperar.
+
+`ETF_SHEET_TITLE`/`ETF_VIEW_FIRST_ROW`/`ETF_NATIVE_FIRST_COL`/`ETF_CURRENCY_COL`
+duplicam `VIEW_SHEET.etf`/`VIEW_FIRST_ROW`/o layout de `marketColumns` em
+`src/sheets/schema.ts`. Mudou a ordem das colunas da aba ETFs lá, mude aqui.
 
 ## Restrições do ambiente
 

@@ -480,6 +480,32 @@ export const MIGRATIONS: Migration[] = [
     touchesData: false,
     apply: async () => ['Nada a transformar — mudança aditiva'],
   },
+  {
+    to: 7,
+    title: 'ETF passa a aceitar B3, não só EUA',
+    description:
+      'A classe "ETFs" deixa de presumir dólar: agora aceita também ETF listado na B3, com a ' +
+      'moeda lida do cadastro de cada ativo em vez de fixada pela classe. Renomeia o ' +
+      'identificador interno `us_etf` → `etf` — que é a chave gravada na coluna `Classe` de ' +
+      '`Ativos` e no prefixo `target_us_etf` de `Config`. Só o texto do identificador muda; ' +
+      'quantidade, moeda, cotação e histórico de cada ativo continuam intactos.',
+    touchesData: true,
+    apply: async (ctx) => {
+      const actions: string[] = []
+
+      const renamedAssets = await transformColumn(ctx, SHEET.assets, 'C', (value) =>
+        value === 'us_etf' ? 'etf' : value,
+      )
+      actions.push(`Ativos: ${renamedAssets} linha(s) conferida(s) na coluna Classe`)
+
+      const renamedConfig = await transformColumn(ctx, SHEET.config, 'A', (value) =>
+        value === 'target_us_etf' ? 'target_etf' : value,
+      )
+      actions.push(`Config: ${renamedConfig} linha(s) conferida(s) na coluna Chave`)
+
+      return actions
+    },
+  },
 ]
 
 /**

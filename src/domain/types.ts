@@ -4,12 +4,12 @@
  */
 
 /** Classes de ativo suportadas. O valor é o que vai gravado na planilha. */
-export const ASSET_CLASSES = ['us_stock', 'us_etf', 'br_stock', 'br_fii', 'fixed_income'] as const
+export const ASSET_CLASSES = ['us_stock', 'etf', 'br_stock', 'br_fii', 'fixed_income'] as const
 export type AssetClass = (typeof ASSET_CLASSES)[number]
 
 export const ASSET_CLASS_LABELS: Record<AssetClass, string> = {
   us_stock: 'Ações EUA',
-  us_etf: 'ETFs',
+  etf: 'ETFs',
   br_stock: 'Ações BR',
   br_fii: 'FIIs',
   fixed_income: 'Renda Fixa',

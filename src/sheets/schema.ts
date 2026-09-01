@@ -22,7 +22,7 @@ import {
 } from '@/domain/types'
 
 /** Gravada em `Config`. O instalador compara e avisa quando a planilha está velha. */
-export const SCHEMA_VERSION = 6
+export const SCHEMA_VERSION = 7
 
 /**
  * Chave em `Config` com o carimbo da última execução do Apps Script.
@@ -187,7 +187,7 @@ export const SHEET = {
 /** Uma aba de apresentação por classe de ativo. */
 export const VIEW_SHEET: Record<AssetClass, string> = {
   us_stock: 'Ações EUA',
-  us_etf: 'ETFs',
+  etf: 'ETFs',
   br_stock: 'Ações BR',
   br_fii: 'FIIs',
   fixed_income: 'Renda Fixa',
@@ -239,10 +239,15 @@ export const NUMBER_FORMAT: Record<ColumnFormat, { type: string; pattern: string
   factor: { type: 'NUMBER', pattern: '0.00000000' },
 }
 
-/** Moeda nativa de cada classe. Define o formato das colunas em moeda nativa. */
-export const CLASS_CURRENCY: Record<AssetClass, Currency> = {
+/**
+ * Moeda nativa de cada classe. `'mixed'` quando a classe aceita ativos em mais
+ * de uma moeda (ETF: tanto o americano quanto o listado na B3 vivem na mesma
+ * classe) — nesse caso a moeda é lida do CADASTRO DO ATIVO, linha a linha, em
+ * vez de presumida pela classe inteira.
+ */
+export const CLASS_CURRENCY: Record<AssetClass, Currency | 'mixed'> = {
   us_stock: 'USD',
-  us_etf: 'USD',
+  etf: 'mixed',
   br_stock: 'BRL',
   br_fii: 'BRL',
   fixed_income: 'BRL',
@@ -459,7 +464,7 @@ export const CONFIG_ROWS: Array<{ key: string; value: string; description: strin
     description: 'Câmbio de hoje. Converte o valor de mercado dos ativos em USD. Delay de ~20 min.',
   },
   { key: 'target_fixed_income', value: '0,40', description: 'Meta de alocação — Renda Fixa.' },
-  { key: 'target_us_etf', value: '0,40', description: 'Meta de alocação — ETFs EUA.' },
+  { key: 'target_etf', value: '0,40', description: 'Meta de alocação — ETFs (EUA e B3).' },
   { key: 'target_us_stock', value: '0,20', description: 'Meta de alocação — Ações EUA (satélite).' },
   { key: 'target_br_stock', value: '0', description: 'Meta de alocação — Ações Brasil.' },
   { key: 'target_br_fii', value: '0', description: 'Meta de alocação — FIIs.' },
@@ -537,7 +542,7 @@ export interface ViewSheetSpec {
  */
 const TOTAL_RANGE_NAME: Record<AssetClass, string> = {
   us_stock: 'TOTAL_US_STOCK',
-  us_etf: 'TOTAL_US_ETF',
+  etf: 'TOTAL_ETF',
   br_stock: 'TOTAL_BR_STOCK',
   br_fii: 'TOTAL_BR_FII',
   fixed_income: 'TOTAL_FIXED_INCOME',
@@ -551,6 +556,9 @@ const CLASS_SHARE_HEADER = '% da classe'
 
 /** Objetivo do ativo, projetado de `Ativos`/`Contratos RF` — usado para somar por objetivo no Painel. */
 const OBJECTIVE_HEADER = 'Objetivo'
+
+/** Moeda do ativo, só na aba de classe com moeda mista (ETF) — ver `CLASS_CURRENCY`. */
+export const CURRENCY_HEADER = 'Moeda'
 
 const trades = (range: string) => ref(SHEET.trades, range)
 const assets = (range: string) => ref(SHEET.assets, range)
@@ -585,10 +593,28 @@ const sumTrades = (col: string, row: number, kind: string) =>
  * as soma no custo de aquisição.
  */
 function marketColumns(assetClass: AssetClass): ViewColumnSpec[] {
-  const isUsd = CLASS_CURRENCY[assetClass] === 'USD'
-  const toBRL = (expression: string) => (isUsd ? `${expression}*CAMBIO` : expression)
+  const classCurrency = CLASS_CURRENCY[assetClass]
+  const mixed = classCurrency === 'mixed'
+  const isUsd = classCurrency === 'USD'
 
-  return [
+  /**
+   * Classe `mixed` (ETF): moeda nativa não é uma constante da aba, é lida do
+   * cadastro do ativo linha a linha — por isso as colunas "nativas" abaixo
+   * usam `'price'` (número puro, sem símbolo de moeda) em vez de `'native'`,
+   * mesmo padrão já usado em `Operações`/`Cotações` para colunas que também
+   * misturam moeda por linha.
+   */
+  const nativeFormat: ColumnFormat | 'native' = mixed ? 'price' : 'native'
+
+  const assetCurrency = (row: number) => `VLOOKUP($A${row};${assets('$A:$D')};4;FALSE)`
+  const toBRL = (row: number, expression: string) =>
+    mixed
+      ? `IF(${assetCurrency(row)}="USD";${expression}*CAMBIO;${expression})`
+      : isUsd
+        ? `${expression}*CAMBIO`
+        : expression
+
+  const columns: ViewColumnSpec[] = [
     {
       // Uma fórmula só, escrita na primeira linha: o FILTER "derrama" a lista
       // de ativos da classe para baixo e as abas crescem sozinhas conforme a
@@ -612,39 +638,39 @@ function marketColumns(assetClass: AssetClass): ViewColumnSpec[] {
     },
     {
       header: 'Preço médio',
-      format: 'native',
+      format: nativeFormat,
       width: 120,
       formula: (row) =>
         guarded(row, `IFERROR(${sumTrades('K', row, 'buy')}/${sumTrades('E', row, 'buy')};0)`),
     },
     {
       header: 'Cotação',
-      format: 'native',
+      format: nativeFormat,
       width: 110,
       formula: (row) => guarded(row, `IFERROR(VLOOKUP($A${row};${quotes('$A:$B')};2;FALSE);0)`),
     },
     {
       header: 'Custo total',
-      format: 'native',
+      format: nativeFormat,
       width: 130,
       formula: (row) => guarded(row, `$C${row}*$D${row}`),
     },
     {
       header: 'Valor de mercado',
-      format: 'native',
+      format: nativeFormat,
       width: 150,
       formula: (row) => guarded(row, `$C${row}*$E${row}`),
     },
     {
       header: 'Proventos',
-      format: 'native',
+      format: nativeFormat,
       width: 110,
       formula: (row) =>
         guarded(row, `${sumTrades('K', row, 'dividend')}+${sumTrades('K', row, 'interest')}`),
     },
     {
       header: 'Rendimento',
-      format: 'native',
+      format: nativeFormat,
       width: 120,
       formula: (row) => guarded(row, `$G${row}-$F${row}+$H${row}`),
     },
@@ -658,7 +684,7 @@ function marketColumns(assetClass: AssetClass): ViewColumnSpec[] {
       header: TOTAL_HEADER,
       format: 'brl',
       width: 140,
-      formula: (row) => guarded(row, toBRL(`$G${row}`)),
+      formula: (row) => guarded(row, toBRL(row, `$G${row}`)),
     },
     {
       // Peso do ativo DENTRO da classe, não na carteira inteira: "BBAS3 é 20%
@@ -679,6 +705,19 @@ function marketColumns(assetClass: AssetClass): ViewColumnSpec[] {
         guarded(row, translated(`IFERROR(VLOOKUP($A${row};${assets('$A:$F')};6;FALSE);"")`, OBJECTIVE_LABELS)),
     },
   ]
+
+  // Só a classe de moeda mista ganha esta coluna, e sempre NO FIM — pelo
+  // mesmo motivo de `OBJECTIVE_HEADER` acima, nenhuma fórmula anterior
+  // referencia sua letra.
+  if (mixed) {
+    columns.push({
+      header: CURRENCY_HEADER,
+      width: 90,
+      formula: (row) => guarded(row, `IFERROR(${assetCurrency(row)};"")`),
+    })
+  }
+
+  return columns
 }
 
 /**

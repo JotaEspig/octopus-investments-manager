@@ -42,9 +42,13 @@ const NEW_CONTRACT = '__new_contract__'
 /** Classes com cotação de mercado. Renda fixa tem o seu próprio caminho. */
 const MARKET_CLASSES = ASSET_CLASSES.filter((assetClass) => assetClass !== 'fixed_income')
 
-const CURRENCY_OF_CLASS: Record<AssetClass, Currency> = {
+/**
+ * Moeda fixa por classe. ETF fica de fora de propósito: é a única classe que
+ * aceita as duas moedas (americano em USD, listado na B3 em BRL) — para ela a
+ * moeda é escolha explícita do usuário, não derivada da classe.
+ */
+const CURRENCY_OF_CLASS: Partial<Record<AssetClass, Currency>> = {
   us_stock: 'USD',
-  us_etf: 'USD',
   br_stock: 'BRL',
   br_fii: 'BRL',
   fixed_income: 'BRL',
@@ -106,6 +110,12 @@ interface FormState {
    * desloca a alocação inteira sem ninguém notar.
    */
   newClass: AssetClass | ''
+  /**
+   * Só usado quando `newClass` é `'etf'`, a única classe sem moeda fixa —
+   * ver `CURRENCY_OF_CLASS`. Vazio até o usuário escolher, pelo mesmo motivo
+   * de `newClass`: nenhum padrão silencioso.
+   */
+  newCurrency: Currency | ''
   newBroker: string
   /**
    * Sugerido automaticamente quando a classe tem regra (FII), mas sempre
@@ -139,6 +149,7 @@ const INITIAL: FormState = {
   newSymbol: '',
   newName: '',
   newClass: '',
+  newCurrency: '',
   newObjective: '',
   newBroker: '',
   contractSymbol: '',
@@ -185,9 +196,12 @@ export function TradeForm({ assets, contracts, onSubmitted }: TradeFormProps) {
    */
   const currency: Currency | null = useMemo(() => {
     if (isFixedIncome) return 'BRL'
-    if (creatingAsset) return form.newClass ? CURRENCY_OF_CLASS[form.newClass] : null
+    if (creatingAsset) {
+      if (form.newClass === 'etf') return form.newCurrency || null
+      return form.newClass ? (CURRENCY_OF_CLASS[form.newClass] ?? null) : null
+    }
     return assets.find((asset) => asset.symbol === form.symbol)?.currency ?? null
-  }, [assets, creatingAsset, form.newClass, form.symbol, isFixedIncome])
+  }, [assets, creatingAsset, form.newClass, form.newCurrency, form.symbol, isFixedIncome])
 
   const needsFx = currency === 'USD'
 
@@ -208,6 +222,12 @@ export function TradeForm({ assets, contracts, onSubmitted }: TradeFormProps) {
     const suggested = form.newClass ? OBJECTIVE_OF_CLASS[form.newClass] : undefined
     if (suggested) set('newObjective', suggested)
   }, [form.newClass])
+
+  // A moeda escolhida só faz sentido para ETF; trocar para outra classe some
+  // com a escolha para não sobrar moeda de uma classe que nem aparece mais.
+  useEffect(() => {
+    if (form.newClass !== 'etf' && form.newCurrency) set('newCurrency', '')
+  }, [form.newClass, form.newCurrency])
 
   // Sugere o objetivo pelo indexador — CDI, prefixado e IPCA+ mapeiam 1 para
   // 1, mas o campo continua editável depois.
@@ -437,6 +457,21 @@ export function TradeForm({ assets, contracts, onSubmitted }: TradeFormProps) {
               ))}
             </Select>
           </Field>
+          {form.newClass === 'etf' ? (
+            <Field label="Moeda" hint="ETF nos EUA é dólar; ETF na B3 é real" error={errors['newAsset.currency']}>
+              <Select
+                value={form.newCurrency}
+                onChange={(event) => set('newCurrency', event.target.value as Currency | '')}
+                required
+              >
+                <option value="" disabled>
+                  Selecione…
+                </option>
+                <option value="USD">Dólar — ETF nos EUA</option>
+                <option value="BRL">Real — ETF na B3</option>
+              </Select>
+            </Field>
+          ) : null}
           <Field label="Corretora" error={errors['newAsset.broker']}>
             <Input
               value={form.newBroker}

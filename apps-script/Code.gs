@@ -59,7 +59,7 @@ const HISTORY_CHART_TITLE = 'Patrimônio — últimos meses'
 
 const CLASS_TOTAL_RANGES = [
   'TOTAL_US_STOCK',
-  'TOTAL_US_ETF',
+  'TOTAL_ETF',
   'TOTAL_BR_STOCK',
   'TOTAL_BR_FII',
   'TOTAL_FIXED_INCOME',
@@ -70,7 +70,7 @@ const CLASS_TOTAL_RANGES = [
  * `src/domain/types.ts` — trocar a ordem lá sem trocar aqui embaralha o
  * histórico em silêncio.
  */
-const CLASS_ORDER = ['us_stock', 'us_etf', 'br_stock', 'br_fii', 'fixed_income']
+const CLASS_ORDER = ['us_stock', 'etf', 'br_stock', 'br_fii', 'fixed_income']
 
 /** Série 12 do SGS: CDI diário em % ao dia. Aberta, sem chave nem cadastro. */
 const SGS_CDI_URL = 'https://api.bcb.gov.br/dados/serie/bcdata.sgs.12/dados'
@@ -96,6 +96,7 @@ function onOpen() {
     .addItem('Desativar atualização diária', 'removeTriggers')
     .addSeparator()
     .addItem('Reparar fórmulas de cotação', 'repairQuotes')
+    .addItem('Formatar moeda dos ETFs', 'formatEtfCurrency')
     .addToUi()
 }
 
@@ -230,6 +231,7 @@ function dailyUpdate() {
   refreshQuotes()
   fetchCdi()
   repriceFixedIncome()
+  formatEtfCurrency()
   snapshotWeekly()
   recordLastRun()
 }
@@ -335,7 +337,9 @@ function refreshQuotes() {
  *
  * Rede de segurança do `refreshQuotes`, e também a saída para quando uma
  * fórmula é apagada sem querer. Espelha `quoteFormula()` de
- * `src/sheets/repositories.ts` — ativo brasileiro leva o prefixo `BVMF:`.
+ * `src/sheets/repositories.ts` — o prefixo `BVMF:` depende da MOEDA, não da
+ * classe: ETF pode ser americano (USD) ou listado na B3 (BRL) dentro da
+ * mesma classe, então BRL já é o sinal certo de "está na B3".
  */
 function repairQuotes() {
   const assets = readRows(sheetByName(SHEETS.assets), 4)
@@ -346,11 +350,11 @@ function repairQuotes() {
     const symbol = String(assets[i][0] || '').trim()
     if (!symbol) continue
 
-    const assetClass = String(assets[i][2] || '').trim()
-    const brazilian = assetClass === 'br_stock' || assetClass === 'br_fii'
+    const currency = String(assets[i][3] || 'BRL').trim()
+    const brazilian = currency === 'BRL'
     const ticker = brazilian ? 'BVMF:' + symbol : symbol
 
-    rows.push([symbol, '=GOOGLEFINANCE("' + ticker + '";"price")', String(assets[i][3] || 'BRL')])
+    rows.push([symbol, '=GOOGLEFINANCE("' + ticker + '";"price")', currency])
   }
 
   if (rows.length === 0) return 0
@@ -358,6 +362,62 @@ function repairQuotes() {
   quotes.getRange(2, 1, rows.length, 3).setValues(rows)
   SpreadsheetApp.flush()
   return rows.length
+}
+
+/**
+ * Título da aba de apresentação do ETF e layout das colunas nativas nela —
+ * duplicado de propósito de `VIEW_SHEET.etf`/`VIEW_FIRST_ROW`/`VIEW_ROWS` em
+ * `src/sheets/schema.ts`. É a única aba de apresentação que o Apps Script
+ * toca: o Sheets não deixa o FORMATO de uma célula variar conforme o VALOR de
+ * outra célula, e a moeda de cada linha (coluna N, "Moeda") só existe depois
+ * que o `FILTER`/`SORT` de `Ativos` calcula — por isso o código estático de
+ * `schema.ts` não sabe formatar por linha, e isto vira trabalho do Apps
+ * Script, junto dos outros ajustes que dependem de dado vivo.
+ */
+const ETF_SHEET_TITLE = 'ETFs'
+const ETF_VIEW_FIRST_ROW = 3
+const ETF_VIEW_ROWS = 100
+/** Colunas D:I — Preço médio, Cotação, Custo total, Valor de mercado, Proventos, Rendimento. */
+const ETF_NATIVE_FIRST_COL = 4
+const ETF_NATIVE_NUM_COLS = 6
+/** Coluna N — "Moeda", última coluna de `marketColumns` quando a classe é mista. */
+const ETF_CURRENCY_COL = 14
+
+/** Mesmos padrões de `usd`/`brl` em `NUMBER_FORMAT` de `src/sheets/schema.ts`. */
+const ETF_USD_FORMAT = '"US$" #,##0.00'
+const ETF_BRL_FORMAT = '"R$" #,##0.00'
+
+/**
+ * Aplica `US$`/`R$` célula a célula na aba "ETFs", conforme a moeda de cada
+ * linha (coluna "Moeda", projetada do cadastro em `Ativos`).
+ *
+ * Precisa rodar de novo sempre que a lista de ETFs muda: a ordem das linhas
+ * vem do `SORT`/`FILTER` da coluna A, então um ativo novo pode empurrar todo
+ * mundo pra baixo. É por isso que faz parte do `dailyUpdate` — e também tem
+ * item de menu próprio para quando não dá pra esperar o próximo dia.
+ */
+function formatEtfCurrency() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ETF_SHEET_TITLE)
+  if (!sheet) return 0
+
+  const range = sheet.getRange(ETF_VIEW_FIRST_ROW, 1, ETF_VIEW_ROWS, ETF_CURRENCY_COL)
+  const rows = range.getValues()
+
+  let count = 0
+  for (let i = 0; i < rows.length; i += 1) {
+    const symbol = String(rows[i][0] || '').trim()
+    if (!symbol) continue
+
+    const currency = String(rows[i][ETF_CURRENCY_COL - 1] || '').trim()
+    const format = currency === 'USD' ? ETF_USD_FORMAT : ETF_BRL_FORMAT
+    sheet
+      .getRange(ETF_VIEW_FIRST_ROW + i, ETF_NATIVE_FIRST_COL, 1, ETF_NATIVE_NUM_COLS)
+      .setNumberFormat(format)
+    count += 1
+  }
+
+  SpreadsheetApp.flush()
+  return count
 }
 
 // ---------------------------------------------------------------------------
@@ -722,8 +782,9 @@ function portfolioValueAt(asOf, scratch) {
     const symbol = String(assets[i][0] || '').trim()
     if (!symbol) continue
     const assetClass = String(assets[i][2] || '').trim()
-    const brazilian = assetClass === 'br_stock' || assetClass === 'br_fii'
-    symbols.push({ symbol: symbol, assetClass: assetClass })
+    const currency = String(assets[i][3] || 'BRL').trim()
+    const brazilian = currency === 'BRL'
+    symbols.push({ symbol: symbol, assetClass: assetClass, currency: currency })
     formulas.push([historicalCloseFormula(brazilian ? 'BVMF:' + symbol : symbol, asOf)])
   }
 
@@ -745,7 +806,7 @@ function portfolioValueAt(asOf, scratch) {
     if (quantity <= 0) continue
 
     const price = Number(prices[i][0]) || 0
-    const usd = symbols[i].assetClass === 'us_stock' || symbols[i].assetClass === 'us_etf'
+    const usd = symbols[i].currency === 'USD'
     const value = quantity * price * (usd ? fx : 1)
 
     if (byClass[symbols[i].assetClass] !== undefined) byClass[symbols[i].assetClass] += value

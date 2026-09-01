@@ -50,14 +50,15 @@ describe('formula()', () => {
   it('marca a fórmula intencional, que não pode ser neutralizada', () => {
     // Se a cotação fosse escapada, `Cotações` guardaria o texto da fórmula em
     // vez do preço, e a carteira inteira zeraria.
-    const marked = formula(quoteFormula('AAPL', 'us_stock'))
+    const marked = formula(quoteFormula('AAPL', 'USD'))
     expect(marked.text).toBe('=GOOGLEFINANCE("AAPL";"price")')
   })
 
-  it('prefixa BVMF só nos ativos brasileiros', () => {
-    expect(quoteFormula('PETR4', 'br_stock')).toContain('BVMF:PETR4')
-    expect(quoteFormula('HGLG11', 'br_fii')).toContain('BVMF:HGLG11')
-    expect(quoteFormula('VOO', 'us_etf')).not.toContain('BVMF')
+  it('prefixa BVMF pela moeda, não pela classe — inclusive ETF listado na B3', () => {
+    expect(quoteFormula('PETR4', 'BRL')).toContain('BVMF:PETR4')
+    expect(quoteFormula('HGLG11', 'BRL')).toContain('BVMF:HGLG11')
+    expect(quoteFormula('VOO', 'USD')).not.toContain('BVMF')
+    expect(quoteFormula('BOVA11', 'BRL')).toContain('BVMF:BOVA11')
   })
 })
 

@@ -15,13 +15,19 @@ import type { AssetInput, FixedIncomeInput, TradeInput } from '@/lib/schemas'
 import { explainSheetsError, type SheetsContext } from './client'
 import {
   ASSETS_SHEET,
+  CLASS_CURRENCY,
   CONFIG_SHEET,
+  CURRENCY_HEADER,
   FIXED_INCOME_SHEET,
+  NUMBER_FORMAT,
   QUOTES_SHEET,
   SHEET,
   TARGET_GOAL_KEY_PREFIX,
   TARGET_KEY_PREFIX,
   TRADES_SHEET,
+  VIEW_FIRST_ROW,
+  VIEW_ROWS,
+  VIEW_SHEETS,
   ref,
   type DataSheetSpec,
 } from './schema'
@@ -33,8 +39,11 @@ import { columnLetter } from './bootstrap'
  * Nenhum intervalo é escrito à mão aqui: a posição de cada coluna vem de
  * `schema.ts`, então reordenar uma coluna lá conserta este arquivo de graça.
  *
- * Escreve-se APENAS nas abas de dados. As abas de apresentação são derivadas
- * por fórmula e o código nunca encosta nelas.
+ * Escreve-se quase só nas abas de dados — as abas de apresentação são
+ * derivadas por fórmula e o código não mexe no CONTEÚDO delas. A única
+ * exceção é `refreshMixedCurrencyFormat`: FORMATO de célula (não valor), na
+ * aba de uma classe com moeda mista, porque o Sheets não deixa esse formato
+ * depender do valor de outra célula — ver o comentário na função.
  */
 
 /**
@@ -315,9 +324,14 @@ export async function appendTrade(context: SheetsContext, input: TradeInput): Pr
  * Sem `IFERROR` de propósito: se o GOOGLEFINANCE não conhecer o papel, a célula
  * mostra `#N/A` e você VÊ o problema. As abas de apresentação já tratam o erro
  * como zero, então o painel não quebra — mas `Cotações` continua denunciando.
+ *
+ * O prefixo `BVMF:` depende da MOEDA, não da classe: `br_stock`/`br_fii` são
+ * sempre BRL, mas ETF pode ser americano (USD) ou listado na B3 (BRL) dentro
+ * da mesma classe — então BRL já é o sinal certo de "está na B3" para todas
+ * as classes com cotação.
  */
-export function quoteFormula(symbol: string, assetClass: AssetClass): string {
-  const isBrazilian = assetClass === 'br_stock' || assetClass === 'br_fii'
+export function quoteFormula(symbol: string, currency: Currency): string {
+  const isBrazilian = currency === 'BRL'
   const ticker = isBrazilian ? `BVMF:${symbol}` : symbol
   return `=GOOGLEFINANCE("${ticker}";"price")`
 }
@@ -334,10 +348,103 @@ export async function appendAsset(context: SheetsContext, input: AssetInput): Pr
   await writeRow(context, QUOTES_SHEET, [
     input.symbol,
     // A única fórmula que este módulo grava de propósito.
-    formula(quoteFormula(input.symbol, input.assetClass)),
+    formula(quoteFormula(input.symbol, input.currency)),
     input.currency,
   ])
+
+  // Ativo novo pode reordenar a aba de classe inteira (o `SORT`/`FILTER` da
+  // coluna A é por símbolo) — sem isto, um ETF cadastrado pelo app ficaria com
+  // `US$`/`R$` errado até o `dailyUpdate` do Apps Script passar por lá.
+  if (CLASS_CURRENCY[input.assetClass] === 'mixed') {
+    await refreshMixedCurrencyFormat(context, input.assetClass)
+  }
+
   return input
+}
+
+/**
+ * Recoloca `US$`/`R$`, célula a célula, nas colunas nativas da aba de
+ * apresentação de uma classe com moeda mista (hoje só ETF).
+ *
+ * Existe porque o Google Sheets não deixa o FORMATO de uma célula depender do
+ * VALOR de outra — a moeda de cada linha só se sabe depois que o
+ * `SORT`/`FILTER` de `Ativos` calcula, então `schema.ts` não tem como
+ * formatar por linha de forma estática (por isso usa `'price'`, número puro,
+ * nessas colunas — ver `marketColumns`). `apps-script/Code.gs` tem a mesma
+ * função (`formatEtfCurrency`), rodando uma vez por dia; esta aqui é o que dá
+ * o resultado certo NA HORA em que o ativo é cadastrado pelo app, sem esperar
+ * o gatilho. Mexeu num, mexa no outro.
+ */
+export async function refreshMixedCurrencyFormat(
+  context: SheetsContext,
+  assetClass: AssetClass,
+): Promise<number> {
+  const spec = VIEW_SHEETS.find((view) => view.assetClass === assetClass)
+  if (!spec) return 0
+
+  const nativeColumns = spec.columns
+    .map((column, index) => ({ column, index }))
+    .filter(({ column }) => column.format === 'price')
+  if (nativeColumns.length === 0) return 0
+
+  const firstColumn = nativeColumns[0]!.index
+  const lastColumn = nativeColumns[nativeColumns.length - 1]!.index
+  if (lastColumn - firstColumn + 1 !== nativeColumns.length) {
+    throw new Error(
+      `Colunas nativas de "${spec.title}" não são contíguas — refreshMixedCurrencyFormat precisa ser revisto`,
+    )
+  }
+
+  const currencyColumn = spec.columns.findIndex((column) => column.header === CURRENCY_HEADER)
+  if (currencyColumn < 0) return 0
+
+  const { api, spreadsheetId } = context
+  const lastRow = VIEW_FIRST_ROW + VIEW_ROWS - 1
+  const range = ref(spec.title, `A${VIEW_FIRST_ROW}:${columnLetter(currencyColumn)}${lastRow}`)
+
+  const [values, meta] = await Promise.all([
+    api.spreadsheets.values.get({ spreadsheetId, range, valueRenderOption: 'UNFORMATTED_VALUE' }),
+    api.spreadsheets.get({ spreadsheetId, includeGridData: false }),
+  ])
+
+  const sheetId = (meta.data.sheets ?? []).find(
+    (sheet) => sheet.properties?.title === spec.title,
+  )?.properties?.sheetId
+  if (sheetId == null) return 0
+
+  const requests: sheets_v4.Schema$Request[] = []
+  const rows = values.data.values ?? []
+  for (const [offset, row] of rows.entries()) {
+    const symbol = String(row[0] ?? '').trim()
+    if (!symbol) continue
+
+    const currency = String(row[currencyColumn] ?? '').trim()
+    // `usd`/`brl` sempre têm padrão definido em NUMBER_FORMAT — nunca `null`.
+    const numberFormat = (currency === 'USD' ? NUMBER_FORMAT.usd : NUMBER_FORMAT.brl)!
+    requests.push({
+      repeatCell: {
+        range: {
+          sheetId,
+          startRowIndex: VIEW_FIRST_ROW - 1 + offset,
+          endRowIndex: VIEW_FIRST_ROW + offset,
+          startColumnIndex: firstColumn,
+          endColumnIndex: lastColumn + 1,
+        },
+        cell: { userEnteredFormat: { numberFormat } },
+        fields: 'userEnteredFormat.numberFormat',
+      },
+    })
+  }
+
+  if (requests.length === 0) return 0
+
+  try {
+    await api.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } })
+  } catch (error) {
+    throw new Error(explainSheetsError(error, context))
+  }
+
+  return requests.length
 }
 
 /**
