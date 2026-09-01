@@ -9,8 +9,9 @@
  *
  *   1. Busca a série do CDI no Banco Central (SGS 12).
  *   2. Marca a renda fixa na curva — CDB e Tesouro não têm ticker nem cotação.
- *   3. Grava o patrimônio na aba Histórico, que é o que alimenta o gráfico de
- *      12 meses. A planilha sozinha só sabe o "agora"; sem isto não há série.
+ *   3. Grava o patrimônio na aba Histórico, um ponto por semana, que é o que
+ *      alimenta o gráfico de evolução. A planilha sozinha só sabe o "agora";
+ *      sem isto não há série.
  *
  * INSTALAÇÃO (uma vez):
  *   1. Na planilha: Extensões → Apps Script
@@ -88,7 +89,7 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Carteira')
     .addItem('Atualizar agora', 'dailyUpdate')
-    .addItem('Gravar snapshot do mês', 'snapshotMonthly')
+    .addItem('Gravar snapshot da semana', 'snapshotWeekly')
     .addItem('Reconstruir meses faltantes', 'backfillHistoryWithFeedback')
     .addSeparator()
     .addItem('Ativar atualização diária', 'installTriggers')
@@ -156,8 +157,8 @@ function togglePatrimonyChartAxis(hidden) {
  *
  * O diário faz o trabalho. O de abertura existe porque o histórico é a única
  * coisa que se perde de forma irreversível: se o gatilho diário quebrar (o
- * Google desativa após falhas repetidas) e o mês virar sem nenhum snapshot,
- * aquele mês some. Como você abre a planilha para olhar a carteira, essa
+ * Google desativa após falhas repetidas) e a semana virar sem nenhum snapshot,
+ * aquela semana some. Como você abre a planilha para olhar a carteira, essa
  * abertura vira a segunda chance.
  */
 function installTriggers() {
@@ -173,7 +174,7 @@ function installTriggers() {
     'Atualização diária ativada.\n\n' +
       'Roda todo dia por volta das 20h: atualiza as cotações, busca o CDI no ' +
       'Banco Central, marca a renda fixa na curva e grava o histórico.\n\n' +
-      'Também gravamos o snapshot ao abrir a planilha, caso o mês vire sem o ' +
+      'Também gravamos o snapshot ao abrir a planilha, caso a semana vire sem o ' +
       'gatilho ter rodado.',
   )
 }
@@ -187,20 +188,31 @@ function removeTriggers() {
 }
 
 /**
- * Roda ao abrir a planilha. Só age se o mês corrente ainda não tem linha —
+ * Roda ao abrir a planilha. Só age se a semana corrente ainda não tem linha —
  * abrir a planilha não pode custar meio minuto de recálculo toda vez.
  */
 function onOpenSafetyNet() {
-  if (hasSnapshotFor(todayIso().slice(0, 7))) return
-  snapshotMonthly()
+  if (hasSnapshotFor(weekKey(todayIso()))) return
+  snapshotWeekly()
 }
 
-function hasSnapshotFor(month) {
+function hasSnapshotFor(week) {
   const rows = readRows(sheetByName(SHEETS.history), 1)
   for (let i = 0; i < rows.length; i += 1) {
-    if (toIso(rows[i][0]).slice(0, 7) === month) return true
+    if (weekKey(toIso(rows[i][0])) === week) return true
   }
   return false
+}
+
+/** Segunda-feira da semana de `iso` (yyyy-MM-dd) — chave de agrupamento do snapshot. */
+function weekKey(iso) {
+  const year = Number(iso.slice(0, 4))
+  const month = Number(iso.slice(5, 7))
+  const day = Number(iso.slice(8, 10))
+  const date = new Date(Date.UTC(year, month - 1, day))
+  const weekday = date.getUTCDay() // 0=domingo..6=sábado
+  date.setUTCDate(date.getUTCDate() + (weekday === 0 ? -6 : 1 - weekday))
+  return Utilities.formatDate(date, 'UTC', 'yyyy-MM-dd')
 }
 
 /**
@@ -218,7 +230,7 @@ function dailyUpdate() {
   refreshQuotes()
   fetchCdi()
   repriceFixedIncome()
-  snapshotMonthly()
+  snapshotWeekly()
   recordLastRun()
 }
 
@@ -544,13 +556,13 @@ function round2(value) {
 // ---------------------------------------------------------------------------
 
 /**
- * Grava o patrimônio do mês corrente na aba Histórico.
+ * Grava o patrimônio da semana corrente na aba Histórico.
  *
- * Faz UPSERT do mês em vez de só anexar: rodando todo dia, o último ponto do
- * gráfico reflete hoje, e cada mês fechado guarda o valor do último dia em que
- * o script rodou.
+ * Faz UPSERT da semana em vez de só anexar: rodando todo dia, o último ponto
+ * do gráfico reflete hoje, e cada semana fechada guarda o valor do último dia
+ * em que o script rodou.
  */
-function snapshotMonthly() {
+function snapshotWeekly() {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet()
   // As fórmulas do Painel precisam estar recalculadas antes da leitura.
   SpreadsheetApp.flush()
@@ -564,10 +576,10 @@ function snapshotMonthly() {
 
   const sheet = sheetByName(SHEETS.history)
   const existing = readRows(sheet, 1)
-  const currentMonth = todayIso().slice(0, 7)
+  const currentWeek = weekKey(todayIso())
 
   for (let i = 0; i < existing.length; i += 1) {
-    if (toIso(existing[i][0]).slice(0, 7) === currentMonth) {
+    if (weekKey(toIso(existing[i][0])) === currentWeek) {
       sheet.getRange(i + 2, 1, 1, row.length).setValues([row])
       return 'atualizado'
     }
@@ -672,8 +684,8 @@ function missingMonths() {
   let cursor = first.slice(0, 7)
 
   while (cursor <= today) {
-    // O mês corrente fica de fora: ele é do `snapshotMonthly`, que usa cotação
-    // de agora em vez de histórica.
+    // O mês corrente fica de fora: ele já é coberto pelo snapshot semanal
+    // (`snapshotWeekly`), que usa cotação de agora em vez de histórica.
     if (cursor !== today && !existing[cursor]) missing.push(cursor)
     cursor = nextMonth(cursor)
   }

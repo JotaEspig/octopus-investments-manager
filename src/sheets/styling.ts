@@ -806,13 +806,13 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
     // Tabela de ativos, abaixo dos gráficos.
     const assetsLast = DASHBOARD.assetsFirstRow + VIEW_ROWS
     requests.push(titleCell(dashboardId, DASHBOARD.assetsTitleRow, PALETTE.dashboard, 13))
-    requests.push(...headerRow(dashboardId, DASHBOARD.assetsHeaderRow, 4, PALETTE.dashboard))
-    requests.push(headerUnderline(dashboardId, DASHBOARD.assetsHeaderRow, 4))
-    requests.push(banding(dashboardId, DASHBOARD.assetsFirstRow, assetsLast, 4))
-    requests.push(outerBorder(grid(dashboardId, DASHBOARD.assetsHeaderRow - 1, assetsLast, 0, 4)))
+    requests.push(...headerRow(dashboardId, DASHBOARD.assetsHeaderRow, 5, PALETTE.dashboard))
+    requests.push(headerUnderline(dashboardId, DASHBOARD.assetsHeaderRow, 5))
+    requests.push(banding(dashboardId, DASHBOARD.assetsFirstRow, assetsLast, 5))
+    requests.push(outerBorder(grid(dashboardId, DASHBOARD.assetsHeaderRow - 1, assetsLast, 0, 5)))
     requests.push({
       repeatCell: {
-        range: grid(dashboardId, DASHBOARD.assetsFirstRow - 1, assetsLast, 2, 3),
+        range: grid(dashboardId, DASHBOARD.assetsFirstRow - 1, assetsLast, 1, 2),
         cell: {
           userEnteredFormat: { numberFormat: NUMBER_FORMAT.brl!, horizontalAlignment: 'RIGHT' },
         },
@@ -830,12 +830,23 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
     })
     requests.push(
       ...privacyMaskBanded(
-        grid(dashboardId, DASHBOARD.assetsFirstRow - 1, assetsLast, 2, 3),
+        grid(dashboardId, DASHBOARD.assetsFirstRow - 1, assetsLast, 1, 2),
         DASHBOARD.assetsFirstRow,
       ),
     )
+    // Classe e Objetivo são texto, mas alinhadas à direita para não destoar
+    // das colunas numéricas ao lado.
+    for (const columnIndex of [2, 4]) {
+      requests.push({
+        repeatCell: {
+          range: grid(dashboardId, DASHBOARD.assetsFirstRow - 1, assetsLast, columnIndex, columnIndex + 1),
+          cell: { userEnteredFormat: { horizontalAlignment: 'RIGHT' } },
+          fields: 'userEnteredFormat(horizontalAlignment)',
+        },
+      })
+    }
 
-    for (const [index, width] of [220, 150, 150, 120].entries()) {
+    for (const [index, width] of [220, 150, 150, 120, 210].entries()) {
       requests.push({
         updateDimensionProperties: {
           range: { sheetId: dashboardId, dimension: 'COLUMNS', startIndex: index, endIndex: index + 1 },

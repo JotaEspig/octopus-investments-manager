@@ -17,7 +17,7 @@ renda fixa sozinha.
 ## A ordem de `dailyUpdate()` importa
 
 ```
-refreshQuotes → fetchCdi → repriceFixedIncome → snapshotMonthly → recordLastRun
+refreshQuotes → fetchCdi → repriceFixedIncome → snapshotWeekly → recordLastRun
 ```
 
 **`refreshQuotes` vem primeiro** porque o snapshot depende das cotações. O
@@ -63,7 +63,7 @@ manuais do setup. Não tente automatizar: já foi verificado que não dá.
 
 Não há teste automatizado aqui. A verificação é manual, pelo editor do Apps
 Script: rodar `fetchCdi()` e conferir contra o site do BCB, e rodar
-`snapshotMonthly()` duas vezes para confirmar que não duplica a linha do mês.
+`snapshotWeekly()` duas vezes para confirmar que não duplica a linha da semana.
 
 ## O histórico é a única coisa irreversível
 

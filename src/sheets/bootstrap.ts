@@ -203,10 +203,10 @@ function dashboardContent(): ValueRange[] {
     { range: ref(DASHBOARD.title, `A${objFirstRow}:E${objLastRow}`), values: objectiveRows },
     {
       range: ref(DASHBOARD.title, `A${DASHBOARD.assetsTitleRow}`),
-      values: [['Ativos — participação dentro da própria classe']],
+      values: [['Ativos']],
     },
     {
-      range: ref(DASHBOARD.title, `A${DASHBOARD.assetsHeaderRow}:D${DASHBOARD.assetsHeaderRow}`),
+      range: ref(DASHBOARD.title, `A${DASHBOARD.assetsHeaderRow}:E${DASHBOARD.assetsHeaderRow}`),
       values: [DASHBOARD_ASSETS_HEADERS],
     },
     {
@@ -272,7 +272,7 @@ function chartDefinitions(dashboardId: number, historyId: number): ChartDefiniti
           legendPosition: 'BOTTOM_LEGEND',
           headerCount: 1,
           axis: [
-            { position: 'BOTTOM_AXIS', title: 'Mês' },
+            { position: 'BOTTOM_AXIS', title: 'Semana' },
             { position: 'LEFT_AXIS', title: 'R$' },
           ],
           domains: [
@@ -646,6 +646,13 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
             // vier explícito (medido: "Invalid field: overlay_position").
             fields: 'anchorCell',
           },
+        })
+        // A posição não é a única coisa que muda entre versões: eixo, série e
+        // domínio também. Sem reenviar a spec, um gráfico já existente fica
+        // preso para sempre na versão de quando foi criado — foi o caso do
+        // rótulo "Mês" que não virou "Semana" mesmo com o código já atualizado.
+        structureRequests.push({
+          updateChartSpec: { chartId: existing.chartId, spec: definition.spec },
         })
         actions.push(`Gráfico reposicionado: ${definition.title}`)
       } else {

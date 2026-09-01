@@ -13,6 +13,7 @@
 import {
   ASSET_CLASSES,
   ASSET_CLASS_LABELS,
+  FIXED_INCOME_INDEXER_LABELS,
   OBJECTIVES,
   OBJECTIVE_LABELS,
   type AssetClass,
@@ -386,7 +387,11 @@ export const CDI_SHEET: DataSheetSpec = {
   ],
 }
 
-/** Snapshot mensal do patrimônio. É o que dá o gráfico de 12 meses. */
+/**
+ * Snapshot semanal do patrimônio. É o que dá o gráfico de evolução. Linhas
+ * antigas (de quando o snapshot era mensal) convivem normalmente com as novas
+ * semanais — o gráfico só reflete a densidade real de cada período.
+ */
 export const HISTORY_SHEET: DataSheetSpec = {
   title: SHEET.history,
   writableColumns: 2 + ASSET_CLASSES.length,
@@ -555,6 +560,18 @@ const contracts = (range: string) => ref(SHEET.fixedIncome, range)
 /** `IF(A{row}="";"";<expr>)` — não polui a aba com zeros nas linhas vazias. */
 const guarded = (row: number, expression: string) => `=IF($A${row}="";"";${expression})`
 
+/**
+ * Troca a chave crua (`"liquidity"`, `"cdi"`…) pelo rótulo em português, com
+ * fallback pro próprio valor cru quando não bate com nenhuma chave conhecida —
+ * vazio (ativo ainda não classificado) ou uma chave futura sem rótulo ainda.
+ */
+const translated = (expression: string, labels: Record<string, string>) => {
+  const cases = Object.entries(labels)
+    .map(([key, label]) => `"${key}";"${label}"`)
+    .join(';')
+  return `SWITCH(${expression};${cases};${expression})`
+}
+
 /** Soma da coluna `col` de `Operações` para um ativo e um tipo de operação. */
 const sumTrades = (col: string, row: number, kind: string) =>
   `SUMIFS(${trades(`$${col}:$${col}`)};${trades('$D:$D')};$A${row};${trades('$C:$C')};"${kind}")`
@@ -658,7 +675,8 @@ function marketColumns(assetClass: AssetClass): ViewColumnSpec[] {
       // `objectiveTotalFormula`.
       header: OBJECTIVE_HEADER,
       width: 170,
-      formula: (row) => guarded(row, `IFERROR(VLOOKUP($A${row};${assets('$A:$F')};6;FALSE);"")`),
+      formula: (row) =>
+        guarded(row, translated(`IFERROR(VLOOKUP($A${row};${assets('$A:$F')};6;FALSE);"")`, OBJECTIVE_LABELS)),
     },
   ]
 }
@@ -688,7 +706,11 @@ const fixedIncomeColumns: ViewColumnSpec[] = [
   {
     header: 'Indexador',
     width: 100,
-    formula: (row) => guarded(row, `IFERROR(VLOOKUP($A${row};${contracts('$A:$D')};4;FALSE);"")`),
+    formula: (row) =>
+      guarded(
+        row,
+        translated(`IFERROR(VLOOKUP($A${row};${contracts('$A:$D')};4;FALSE);"")`, FIXED_INCOME_INDEXER_LABELS),
+      ),
   },
   {
     header: 'Taxa',
@@ -744,7 +766,8 @@ const fixedIncomeColumns: ViewColumnSpec[] = [
     // são do Apps Script) — ver o comentário em `FIXED_INCOME_SHEET`.
     header: OBJECTIVE_HEADER,
     width: 170,
-    formula: (row) => guarded(row, `IFERROR(VLOOKUP($A${row};${contracts('$A:$L')};12;FALSE);"")`),
+    formula: (row) =>
+      guarded(row, translated(`IFERROR(VLOOKUP($A${row};${contracts('$A:$L')};12;FALSE);"")`, OBJECTIVE_LABELS)),
   },
 ]
 
@@ -828,7 +851,13 @@ export const DASHBOARD_OBJECTIVE_HEADERS = ['Objetivo', 'Valor (R$)', '% atual',
 /** Participação do ativo no patrimônio total, não na classe. */
 const PORTFOLIO_SHARE_HEADER = '% da carteira'
 
-export const DASHBOARD_ASSETS_HEADERS = ['Ativo', 'Classe', 'Valor (R$)', PORTFOLIO_SHARE_HEADER]
+export const DASHBOARD_ASSETS_HEADERS = [
+  'Ativo',
+  'Valor (R$)',
+  'Classe',
+  PORTFOLIO_SHARE_HEADER,
+  OBJECTIVE_HEADER,
+]
 
 /**
  * Tabela de todos os ativos no Painel, ordenada por valor.
@@ -837,6 +866,13 @@ export const DASHBOARD_ASSETS_HEADERS = ['Ativo', 'Classe', 'Valor (R$)', PORTFO
  * linhas vazias e ordena decrescente. A coluna de porcentagem é a participação
  * do ativo no PATRIMÔNIO TOTAL — diferente da "% da classe" de cada aba, então
  * "BBAS3 5%" aqui quer dizer 5% da carteira inteira, não 5% das ações brasileiras.
+ *
+ * Valor vem antes de Classe (coluna B, depois C) para bater com a ordem das
+ * outras tabelas do Painel (Classe/Objetivo já seguem valor-antes-de-categoria
+ * em espírito). `SORT`/`FILTER` abaixo se referem à coluna 2 ("Valor (R$)")
+ * por índice — mudar a ordem exige mudar esse índice junto. A coluna Objetivo
+ * já sai traduzida porque lê o "Objetivo" de cada aba de classe, que já é
+ * rótulo (ver `translated` em `marketColumns`).
  *
  * É o único ponto do projeto que usa literal de matriz, e portanto o único que
  * depende dos separadores ambíguos — daí os tokens em vez de pontuação literal.
@@ -849,21 +885,25 @@ export function dashboardAssetsFormula(): string {
     const symbols = ref(spec.title, `$A$${VIEW_FIRST_ROW}:$A$${lastRow}`)
     const values = ref(spec.title, `$K$${VIEW_FIRST_ROW}:$K$${lastRow}`)
     const label = ASSET_CLASS_LABELS[spec.assetClass]
+    const objectiveColumn = columnLetterOfSchema(
+      spec.columns.findIndex((column) => column.header === OBJECTIVE_HEADER),
+    )
+    const objectives = ref(spec.title, `$${objectiveColumn}$${VIEW_FIRST_ROW}:$${objectiveColumn}$${lastRow}`)
 
-    // O fallback mantém 4 colunas quando a classe está vazia: sem ele, um
+    // O fallback mantém 5 colunas quando a classe está vazia: sem ele, um
     // FILTER sem resultado devolve #N/A e derruba a pilha inteira.
     return (
       `IFERROR(FILTER(` +
-      `{${symbols}${c}IF(${symbols}<>"";"${label}";"")${c}${values}${c}IFERROR(${values}/${NAMED_RANGE.total};0)};` +
+      `{${symbols}${c}${values}${c}IF(${symbols}<>"";"${label}";"")${c}IFERROR(${values}/${NAMED_RANGE.total};0)${c}${objectives}};` +
       `${symbols}<>"");` +
-      `{""${c}""${c}0${c}0})`
+      `{""${c}0${c}""${c}0${c}""})`
     )
   })
 
   const stack = `{${blocks.join(FORMULA_TOKEN.arrayRow)}}`
   // LET evita repetir a pilha inteira duas vezes (uma para filtrar, outra para
   // ordenar). FILTER descarta as linhas de fallback das classes vazias.
-  return `=IFERROR(LET(dados;${stack};SORT(FILTER(dados;INDEX(dados;;3)>0);3;FALSE));"")`
+  return `=IFERROR(LET(dados;${stack};SORT(FILTER(dados;INDEX(dados;;2)>0);2;FALSE));"")`
 }
 
 export const NAMED_RANGE = {
@@ -880,16 +920,20 @@ export const NAMED_RANGE = {
  * já projeta o objetivo do ativo na coluna "Objetivo" (`OBJECTIVE_HEADER`,
  * sempre a última — ver `marketColumns`/`fixedIncomeColumns`) e a coluna
  * "Valor (R$)" continua em `$K`, intocada pela adição.
+ *
+ * A coluna "Objetivo" de cada aba guarda o RÓTULO traduzido (`OBJECTIVE_LABELS`),
+ * não a chave crua — o `SUMIF` compara contra o rótulo pelo mesmo motivo.
  */
 export function objectiveTotalFormula(objective: Objective): string {
   const lastRow = VIEW_FIRST_ROW + VIEW_ROWS - 1
+  const label = OBJECTIVE_LABELS[objective]
   const terms = VIEW_SHEETS.map((spec) => {
     const objectiveColumn = columnLetterOfSchema(
       spec.columns.findIndex((column) => column.header === OBJECTIVE_HEADER),
     )
     const objectiveRange = ref(spec.title, `$${objectiveColumn}$${VIEW_FIRST_ROW}:$${objectiveColumn}$${lastRow}`)
     const valueRange = ref(spec.title, `$K$${VIEW_FIRST_ROW}:$K$${lastRow}`)
-    return `SUMIF(${objectiveRange};"${objective}";${valueRange})`
+    return `SUMIF(${objectiveRange};"${label}";${valueRange})`
   })
   return `=${terms.join('+')}`
 }
@@ -905,8 +949,18 @@ function columnLetterOfSchema(index: number): string {
   return letter
 }
 
-/** Quantas linhas do histórico os gráficos cobrem (12 meses folgados). */
-export const HISTORY_CHART_ROWS = 60
+/**
+ * Quantas linhas do histórico os gráficos cobrem. O snapshot agora é semanal
+ * (um ponto por semana, via `snapshotWeekly` em `apps-script/Code.gs`) — 300
+ * linhas cobrem uns 5 anos e meio de folga, a mesma margem generosa que 60
+ * linhas representavam quando o snapshot era mensal.
+ *
+ * O gráfico lê sempre as `HISTORY_CHART_ROWS` primeiras linhas da aba (ver
+ * `chartDefinitions`), e o histórico é ordenado por data crescente — por isso
+ * este número precisa ser maior que o total de linhas já gravadas, senão o
+ * gráfico para de avançar e mostra só a janela mais antiga.
+ */
+export const HISTORY_CHART_ROWS = 300
 
 /**
  * Título do gráfico de patrimônio. Duplicado em `apps-script/Code.gs` (não dá

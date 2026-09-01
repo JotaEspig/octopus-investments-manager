@@ -153,7 +153,7 @@ describe('dashboardAssetsFormula', () => {
   })
 
   it('ordena pela coluna de valor, decrescente', () => {
-    expect(formula).toContain('SORT(FILTER(dados;INDEX(dados;;3)>0);3;FALSE)')
+    expect(formula).toContain('SORT(FILTER(dados;INDEX(dados;;2)>0);2;FALSE)')
   })
 
   it('fica equilibrada e sem tokens nos dois dialetos', () => {
@@ -164,11 +164,11 @@ describe('dashboardAssetsFormula', () => {
     }
   })
 
-  it('dá a cada bloco um fallback de 4 colunas', () => {
+  it('dá a cada bloco um fallback de 5 colunas', () => {
     // Sem o fallback, uma classe sem ativos devolve #N/A e derruba a pilha
     // inteira — a tabela some por causa de uma seção vazia.
     const separator = FORMULA_TOKEN.arrayColumn
-    const fallback = `{""${separator}""${separator}0${separator}0}`
+    const fallback = `{""${separator}0${separator}""${separator}0${separator}""}`
     expect(formula.split(fallback)).toHaveLength(VIEW_SHEETS.length + 1)
   })
 })
