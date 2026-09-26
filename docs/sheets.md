@@ -41,5 +41,30 @@ condição e o fuso nunca era aplicado numa planilha que já nascia `pt_BR`.
 **`values.append` não serve** em `Operações`: as colunas ARRAYFORMULA se
 estendem até o fim da grade e o append escreveria lá embaixo. Use `nextRow`.
 
+## O rendimento % da planilha é na MOEDA DO ATIVO
+
+A planilha mostra rendimento em porcentagem em quatro lugares: na linha de cada
+ativo nas abas de classe, na linha 1 de cada aba (a classe inteira), e no Painel
+por classe, por objetivo e por ativo. **Os quatro são a mesma conta**, e é de
+propósito: agregado é sempre `Σ ganho ÷ Σ custo`, nunca média de porcentagens —
+média daria o mesmo peso a uma posição de mil reais e a uma de cem.
+
+Somar ETF americano com CDB exige uma moeda comum, e a conversão usa o câmbio de
+**hoje**. Como ele multiplica numerador e denominador, se cancela: o percentual
+que a planilha mostra é o do ATIVO, na moeda dele — para VOO, o retorno em
+dólar. Foi a escolha deliberada, porque é o que mantém o número do Painel
+idêntico ao da aba de classe.
+
+O rendimento do INVESTIDOR em reais, que usa o câmbio de cada compra, é outro
+número (costuma ser bem diferente em posição dolarizada) e não sai de fórmula:
+precisaria de uma coluna de custo em reais nas abas de classe. Ele vive em
+`src/domain/` (`returnBRL`) e é o que o app e o MCP devolvem — ver `docs/domain.md`.
+
+Uma exceção conhecida: a aba `Renda Fixa` chama de "Rendimento (R$)" a diferença
+entre valor bruto e aplicado, **sem somar proventos** de `interest` — ela não tem
+coluna de proventos. Enquanto nenhum contrato pagar juros em dinheiro os números
+batem; quando pagar, `verify:sheet` acusa, e o certo será dar à aba a coluna que
+falta.
+
 Regra de mudança de schema e migração: `CLAUDE.md` da raiz (é regra de
 funcionamento do versionamento, não de negócio).

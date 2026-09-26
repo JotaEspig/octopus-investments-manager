@@ -198,6 +198,16 @@ export function ref(sheet: string, range: string): string {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(sheet) ? `${sheet}!${range}` : `'${sheet}'!${range}`
 }
 
+/**
+ * Intervalos nomeados globais. Ficam aqui em cima, e não junto do Painel, por
+ * ordem de inicialização: as fórmulas das abas de classe são montadas ainda na
+ * carga do módulo (ver `VIEW_SHEETS`) e já citam `CAMBIO`.
+ */
+export const NAMED_RANGE = {
+  fx: 'CAMBIO',
+  total: 'PATRIMONIO_TOTAL',
+} as const
+
 // ---------------------------------------------------------------------------
 // Formatos
 // ---------------------------------------------------------------------------
@@ -533,14 +543,31 @@ export interface ViewColumnSpec {
   formula: (row: number) => string
 }
 
-export interface ViewSheetSpec {
+/**
+ * O que basta para montar uma fórmula que varre uma aba de classe. É um tipo à
+ * parte porque `sumInBRL` precisa dele ENQUANTO o `ViewSheetSpec` ainda está
+ * sendo montado — as fórmulas agregadas nascem junto com a aba.
+ */
+interface ViewLayout {
   title: string
   assetClass: AssetClass
   columns: ViewColumnSpec[]
+}
+
+export interface ViewSheetSpec extends ViewLayout {
   /** Coluna (0-based) somada para dar o total da aba, sempre em BRL. */
   totalColumn: number
+  /** Coluna (0-based) do "Rendimento %" — a linha 1 traz o da classe inteira. */
+  returnColumn: number
+  /** Coluna (0-based) do ganho e do custo, o numerador e o denominador do rendimento %. */
+  gainColumn: number
+  costColumn: number
   /** Nome ASCII do intervalo nomeado com o total — o Painel lê por aqui. */
   totalRangeName: string
+  /** Nome ASCII do intervalo nomeado com o rendimento % da classe — idem. */
+  returnRangeName: string
+  /** Fórmula do rendimento % da classe inteira, escrita na linha 1. */
+  classReturnFormula: string
 }
 
 /**
@@ -557,11 +584,48 @@ const TOTAL_RANGE_NAME: Record<AssetClass, string> = {
   fixed_income: 'TOTAL_FIXED_INCOME',
 }
 
+/**
+ * Intervalo nomeado com o rendimento % de cada aba de classe — o par do
+ * `TOTAL_RANGE_NAME` acima, e pelo mesmo motivo: o Painel lê o número por
+ * NOME, então mexer no layout de uma aba não quebra o Painel.
+ */
+const RETURN_RANGE_NAME: Record<AssetClass, string> = {
+  us_stock: 'RETORNO_US_STOCK',
+  etf: 'RETORNO_ETF',
+  br_stock: 'RETORNO_BR_STOCK',
+  br_fii: 'RETORNO_BR_FII',
+  fixed_income: 'RETORNO_FIXED_INCOME',
+}
+
 /** Cabeçalho da coluna somada para dar o total da aba. Sempre em reais. */
 const TOTAL_HEADER = 'Valor (R$)'
 
 /** Participação do ativo dentro da própria classe — o que você pediu ver. */
 const CLASS_SHARE_HEADER = '% da classe'
+
+/**
+ * Rendimento em porcentagem. Na linha de cada ativo é o dele; na LINHA 1 é o
+ * da classe inteira (ver `classReturnFormula`), logo acima da coluna que já
+ * mostra a mesma conta ativo a ativo.
+ */
+export const RETURN_PERCENT_HEADER = 'Rendimento %'
+
+/**
+ * Numerador e denominador do rendimento %, nos dois nomes que os dois layouts
+ * usam: `marketColumns` chama de "Rendimento" e "Custo total"; a renda fixa,
+ * que não tem cotação nem quantidade, chama de "Rendimento (R$)" e
+ * "Aplicado (R$)". Os agregados (classe e Painel) somam ESTAS colunas,
+ * localizadas por cabeçalho — nunca por letra.
+ */
+export const GAIN_HEADERS = ['Rendimento', 'Rendimento (R$)']
+const COST_HEADERS = ['Custo total', 'Aplicado (R$)']
+
+/**
+ * Largura da coluna-chave (A) de TODA aba de classe — ticker em umas,
+ * id de contrato em outra. Uma constante só porque elas precisam bater: ao
+ * trocar de aba, a lista tem que continuar começando no mesmo lugar.
+ */
+const VIEW_KEY_COLUMN_WIDTH = 110
 
 /** Objetivo do ativo, projetado de `Ativos`/`Contratos RF` — usado para somar por objetivo no Painel. */
 const OBJECTIVE_HEADER = 'Objetivo'
@@ -618,9 +682,9 @@ function marketColumns(assetClass: AssetClass): ViewColumnSpec[] {
   const assetCurrency = (row: number) => `VLOOKUP($A${row};${assets('$A:$D')};4;FALSE)`
   const toBRL = (row: number, expression: string) =>
     mixed
-      ? `IF(${assetCurrency(row)}="USD";${expression}*CAMBIO;${expression})`
+      ? `IF(${assetCurrency(row)}="USD";${expression}*${NAMED_RANGE.fx};${expression})`
       : isUsd
-        ? `${expression}*CAMBIO`
+        ? `${expression}*${NAMED_RANGE.fx}`
         : expression
 
   const columns: ViewColumnSpec[] = [
@@ -629,7 +693,7 @@ function marketColumns(assetClass: AssetClass): ViewColumnSpec[] {
       // de ativos da classe para baixo e as abas crescem sozinhas conforme a
       // carteira cresce.
       header: 'Ativo',
-      width: 110,
+      width: VIEW_KEY_COLUMN_WIDTH,
       formula: () =>
         `=IFERROR(SORT(FILTER(${assets('$A$2:$A')};` +
         `${assets('$C$2:$C')}="${assetClass}";${assets('$A$2:$A')}<>""));"")`,
@@ -684,7 +748,7 @@ function marketColumns(assetClass: AssetClass): ViewColumnSpec[] {
       formula: (row) => guarded(row, `$G${row}-$F${row}+$H${row}`),
     },
     {
-      header: 'Rendimento %',
+      header: RETURN_PERCENT_HEADER,
       format: 'percent',
       width: 120,
       formula: (row) => guarded(row, `IFERROR($I${row}/$F${row};0)`),
@@ -739,7 +803,7 @@ function marketColumns(assetClass: AssetClass): ViewColumnSpec[] {
 const fixedIncomeColumns: ViewColumnSpec[] = [
   {
     header: 'Contrato',
-    width: 190,
+    width: VIEW_KEY_COLUMN_WIDTH,
     formula: () =>
       `=IFERROR(SORT(FILTER(${contracts('$A$2:$A')};${contracts('$A$2:$A')}<>""));"")`,
   },
@@ -793,7 +857,7 @@ const fixedIncomeColumns: ViewColumnSpec[] = [
     formula: (row) => guarded(row, `$H${row}-$G${row}`),
   },
   {
-    header: 'Rendimento %',
+    header: RETURN_PERCENT_HEADER,
     format: 'percent',
     width: 120,
     formula: (row) => guarded(row, `IFERROR($I${row}/$G${row};0)`),
@@ -822,17 +886,97 @@ const fixedIncomeColumns: ViewColumnSpec[] = [
   },
 ]
 
+/** Intervalo absoluto de uma coluna inteira de aba de apresentação. */
+function viewColumnRange(title: string, columnIndex: number): string {
+  const letter = columnLetterOfSchema(columnIndex)
+  return ref(title, `$${letter}$${VIEW_FIRST_ROW}:$${letter}$${VIEW_FIRST_ROW + VIEW_ROWS - 1}`)
+}
+
+/**
+ * Soma uma coluna de dinheiro de uma aba de classe EM REAIS, ao câmbio de
+ * HOJE — opcionalmente só as linhas de um objetivo.
+ *
+ * As colunas de dinheiro das abas de classe estão na moeda do ativo, então
+ * somar ETF americano com CDB exige uma moeda comum. Converter ao câmbio de
+ * hoje (e não ao de cada compra) é deliberado: no rendimento %, numerador e
+ * denominador recebem o MESMO câmbio, que se cancela — então o percentual
+ * daqui é idêntico ao que a própria aba já mostra linha a linha na coluna
+ * "Rendimento %", e as duas telas nunca discordam.
+ *
+ * O preço disso é que este número é o rendimento DO ATIVO, na moeda dele, e
+ * não o do investidor em reais. Para esse, que usa o câmbio de cada compra, a
+ * autoridade é `src/domain/` (`returnBRL`) — é o que o app e o MCP devolvem.
+ */
+function sumInBRL(layout: ViewLayout, columnIndex: number, objectiveLabel?: string): string {
+  const columnOf = (header: string) =>
+    viewColumnRange(
+      layout.title,
+      layout.columns.findIndex((column) => column.header === header),
+    )
+  const values = viewColumnRange(layout.title, columnIndex)
+  const objectives = columnOf(OBJECTIVE_HEADER)
+  const currency = CLASS_CURRENCY[layout.assetClass]
+
+  // Classe de moeda mista: a moeda é de cada linha, então a conversão também.
+  // `"<>USD"` pega o que está em reais e também as linhas vazias — que somam
+  // zero, porque a célula de valor delas é "" e não número.
+  if (currency === 'mixed') {
+    const currencies = columnOf(CURRENCY_HEADER)
+    const byCurrency = (match: string) =>
+      objectiveLabel === undefined
+        ? `SUMIF(${currencies};"${match}";${values})`
+        : `SUMIFS(${values};${objectives};"${objectiveLabel}";${currencies};"${match}")`
+    return `(${byCurrency('USD')}*${NAMED_RANGE.fx}+${byCurrency('<>USD')})`
+  }
+
+  const sum =
+    objectiveLabel === undefined
+      ? `SUM(${values})`
+      : `SUMIF(${objectives};"${objectiveLabel}";${values})`
+  return currency === 'USD' ? `(${sum}*${NAMED_RANGE.fx})` : `(${sum})`
+}
+
+/**
+ * Rendimento % de um conjunto de linhas: ganho ÷ custo, os dois em reais.
+ *
+ * É a mesma conta da coluna "Rendimento %" um nível acima — e NÃO a média das
+ * porcentagens, que daria o mesmo peso a uma posição de mil reais e a uma de
+ * cem. Cada parte é uma aba; o rendimento de um objetivo atravessa as cinco.
+ */
+function aggregateReturnFormula(parts: Array<{ gain: string; cost: string }>): string {
+  const gain = parts.map((part) => part.gain).join('+')
+  const cost = parts.map((part) => part.cost).join('+')
+  return `=IFERROR((${gain})/(${cost});0)`
+}
+
 export const VIEW_SHEETS: ViewSheetSpec[] = ASSET_CLASSES.map((assetClass) => {
+  const title = VIEW_SHEET[assetClass]
   const columns = assetClass === 'fixed_income' ? fixedIncomeColumns : marketColumns(assetClass)
-  const totalColumn = columns.findIndex((column) => column.header === TOTAL_HEADER)
-  if (totalColumn < 0) throw new Error(`Aba ${VIEW_SHEET[assetClass]} sem a coluna "${TOTAL_HEADER}"`)
+
+  const columnOf = (headers: string[], what: string) => {
+    const index = columns.findIndex((column) => headers.includes(column.header))
+    if (index < 0) throw new Error(`Aba ${title} sem a coluna de ${what}`)
+    return index
+  }
+
+  const totalColumn = columnOf([TOTAL_HEADER], TOTAL_HEADER)
+  const returnColumn = columnOf([RETURN_PERCENT_HEADER], RETURN_PERCENT_HEADER)
+  const gainColumn = columnOf(GAIN_HEADERS, 'ganho')
+  const costColumn = columnOf(COST_HEADERS, 'custo')
+
+  const layout: ViewLayout = { title, assetClass, columns }
 
   return {
-    title: VIEW_SHEET[assetClass],
-    assetClass,
-    columns,
+    ...layout,
     totalColumn,
+    returnColumn,
+    gainColumn,
+    costColumn,
     totalRangeName: TOTAL_RANGE_NAME[assetClass],
+    returnRangeName: RETURN_RANGE_NAME[assetClass],
+    classReturnFormula: aggregateReturnFormula([
+      { gain: sumInBRL(layout, gainColumn), cost: sumInBRL(layout, costColumn) },
+    ]),
   }
 })
 
@@ -853,24 +997,36 @@ export const DASHBOARD = {
    * dado da lista.
    */
   privacyRow: 1,
-  /** Coluna (0-based) do rótulo "Ocultar valores". */
-  privacyLabelColumn: 5,
-  /** Coluna (0-based) do checkbox em si. */
-  privacyCheckboxColumn: 6,
+  /**
+   * Coluna (0-based) do rótulo "Modo privacidade". Fica logo DEPOIS da última
+   * coluna das tabelas (A:F) — andou de F para G quando a coluna de rendimento
+   * entrou, para o controle continuar fora do bloco de tabelas.
+   */
+  privacyLabelColumn: 6,
+  /** Coluna (0-based) do checkbox em si. Espelhada em `apps-script/Code.gs`. */
+  privacyCheckboxColumn: 7,
   /** Linha do cabeçalho da tabela de alocação por classe. */
   allocationHeaderRow: 7,
   /** Primeira linha de classe. */
   allocationFirstRow: 8,
   /**
    * Tabela de alocação por OBJETIVO — logo ABAIXO da de classe (mesma
-   * largura de 5 colunas, A:E), com uma linha em branco entre as duas.
+   * largura, A:F — ver `DASHBOARD_TABLE_COLUMNS`), com uma linha em branco
+   * entre as duas.
    * `allocationFirstRow` tem 5 linhas de classe (8–12); esta começa na 14
    * para deixar a 13 como respiro.
    */
   objectivesHeaderRow: 14,
   objectivesFirstRow: 15,
+  /** Coluna (0-based) do "Desvio" — só a tabela de classe e a de objetivo têm. */
+  driftColumn: 4,
   /**
-   * Tabela de ativos — logo abaixo da de objetivo, mesma coluna (A:D). Os
+   * Coluna (0-based) do "Rendimento %" nas TRÊS tabelas — a última de cada
+   * uma, sempre a mesma, para as três lerem como uma coluna só de cima a baixo.
+   */
+  returnColumn: 5,
+  /**
+   * Tabela de ativos — logo abaixo da de objetivo, mesma coluna (A:F). Os
    * gráficos NÃO ficam nesta coluna (ver `chartsColumn` abaixo), então a
    * tabela de ativos não precisa reservar espaço vertical pra eles: vem
    * direto depois da tabela de objetivo (que termina na 21) mais uma linha
@@ -882,9 +1038,9 @@ export const DASHBOARD = {
   /**
    * Coluna (0-based) onde os dois gráficos ficam, empilhados à DIREITA das
    * tabelas — pizza de alocação em cima, linha de patrimônio embaixo. Longe
-   * de A:E (as tabelas) e de F/G (controle de privacidade, linha 1 só).
+   * de A:F (as tabelas) e de G/H (controle de privacidade, linha 1 só).
    */
-  chartsColumn: 6,
+  chartsColumn: 7,
   /** Linha de âncora da pizza de alocação — alinhada com o bloco de totais. */
   allocationChartRow: 3,
   /**
@@ -895,9 +1051,23 @@ export const DASHBOARD = {
   historyChartRow: 22,
 } as const
 
-export const DASHBOARD_ALLOCATION_HEADERS = ['Classe', 'Valor (R$)', '% atual', 'Meta', 'Desvio']
+export const DASHBOARD_ALLOCATION_HEADERS = [
+  'Classe',
+  'Valor (R$)',
+  '% atual',
+  'Meta',
+  'Desvio',
+  RETURN_PERCENT_HEADER,
+]
 
-export const DASHBOARD_OBJECTIVE_HEADERS = ['Objetivo', 'Valor (R$)', '% atual', 'Meta', 'Desvio']
+export const DASHBOARD_OBJECTIVE_HEADERS = [
+  'Objetivo',
+  'Valor (R$)',
+  '% atual',
+  'Meta',
+  'Desvio',
+  RETURN_PERCENT_HEADER,
+]
 
 /** Participação do ativo no patrimônio total, não na classe. */
 const PORTFOLIO_SHARE_HEADER = '% da carteira'
@@ -908,7 +1078,15 @@ export const DASHBOARD_ASSETS_HEADERS = [
   'Classe',
   PORTFOLIO_SHARE_HEADER,
   OBJECTIVE_HEADER,
+  RETURN_PERCENT_HEADER,
 ]
+
+/**
+ * Largura das três tabelas do Painel, em colunas (A:F). As três andam juntas
+ * de propósito — é o que faz elas lerem como uma coluna só de cima a baixo, e
+ * o que `styling.ts` usa para pintar cabeçalho, listra e borda sem número solto.
+ */
+export const DASHBOARD_TABLE_COLUMNS = DASHBOARD_ALLOCATION_HEADERS.length
 
 /**
  * Tabela de todos os ativos no Painel, ordenada por valor.
@@ -923,31 +1101,33 @@ export const DASHBOARD_ASSETS_HEADERS = [
  * em espírito). `SORT`/`FILTER` abaixo se referem à coluna 2 ("Valor (R$)")
  * por índice — mudar a ordem exige mudar esse índice junto. A coluna Objetivo
  * já sai traduzida porque lê o "Objetivo" de cada aba de classe, que já é
- * rótulo (ver `translated` em `marketColumns`).
+ * rótulo (ver `translated` em `marketColumns`), e a de rendimento % é a mesma
+ * célula que a aba de classe mostra — copiada, não recalculada.
  *
  * É o único ponto do projeto que usa literal de matriz, e portanto o único que
  * depende dos separadores ambíguos — daí os tokens em vez de pontuação literal.
  */
 export function dashboardAssetsFormula(): string {
   const c = FORMULA_TOKEN.arrayColumn
-  const lastRow = VIEW_FIRST_ROW + VIEW_ROWS - 1
 
   const blocks = VIEW_SHEETS.map((spec) => {
-    const symbols = ref(spec.title, `$A$${VIEW_FIRST_ROW}:$A$${lastRow}`)
-    const values = ref(spec.title, `$K$${VIEW_FIRST_ROW}:$K$${lastRow}`)
-    const label = ASSET_CLASS_LABELS[spec.assetClass]
-    const objectiveColumn = columnLetterOfSchema(
+    const symbols = viewColumnRange(spec.title, 0)
+    const values = viewColumnRange(spec.title, spec.totalColumn)
+    const objectives = viewColumnRange(
+      spec.title,
       spec.columns.findIndex((column) => column.header === OBJECTIVE_HEADER),
     )
-    const objectives = ref(spec.title, `$${objectiveColumn}$${VIEW_FIRST_ROW}:$${objectiveColumn}$${lastRow}`)
+    const returns = viewColumnRange(spec.title, spec.returnColumn)
+    const label = ASSET_CLASS_LABELS[spec.assetClass]
 
-    // O fallback mantém 5 colunas quando a classe está vazia: sem ele, um
+    // O fallback mantém as 6 colunas quando a classe está vazia: sem ele, um
     // FILTER sem resultado devolve #N/A e derruba a pilha inteira.
     return (
       `IFERROR(FILTER(` +
-      `{${symbols}${c}${values}${c}IF(${symbols}<>"";"${label}";"")${c}IFERROR(${values}/${NAMED_RANGE.total};0)${c}${objectives}};` +
+      `{${symbols}${c}${values}${c}IF(${symbols}<>"";"${label}";"")${c}` +
+      `IFERROR(${values}/${NAMED_RANGE.total};0)${c}${objectives}${c}${returns}};` +
       `${symbols}<>"");` +
-      `{""${c}0${c}""${c}0${c}""})`
+      `{""${c}0${c}""${c}0${c}""${c}0})`
     )
   })
 
@@ -956,11 +1136,6 @@ export function dashboardAssetsFormula(): string {
   // ordenar). FILTER descarta as linhas de fallback das classes vazias.
   return `=IFERROR(LET(dados;${stack};SORT(FILTER(dados;INDEX(dados;;2)>0);2;FALSE));"")`
 }
-
-export const NAMED_RANGE = {
-  fx: 'CAMBIO',
-  total: 'PATRIMONIO_TOTAL',
-} as const
 
 /**
  * Total em BRL de um objetivo, somado através das cinco abas de classe.
@@ -987,6 +1162,24 @@ export function objectiveTotalFormula(objective: Objective): string {
     return `SUMIF(${objectiveRange};"${label}";${valueRange})`
   })
   return `=${terms.join('+')}`
+}
+
+/**
+ * Rendimento % de um objetivo, atravessando as cinco abas de classe.
+ *
+ * Mesmo motivo do `objectiveTotalFormula` acima: o objetivo cruza as classes,
+ * então não há um intervalo nomeado por objetivo — é ganho e custo somados aba
+ * a aba, cada uma convertida em reais por `sumInBRL`, e a divisão no fim. Uma
+ * posição grande pesa mais que uma pequena, como tem que ser.
+ */
+export function objectiveReturnFormula(objective: Objective): string {
+  const label = OBJECTIVE_LABELS[objective]
+  return aggregateReturnFormula(
+    VIEW_SHEETS.map((spec) => ({
+      gain: sumInBRL(spec, spec.gainColumn, label),
+      cost: sumInBRL(spec, spec.costColumn, label),
+    })),
+  )
 }
 
 /** Duplicada de `bootstrap.columnLetter` de propósito: importar de lá criaria ciclo. */

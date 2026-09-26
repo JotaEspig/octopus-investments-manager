@@ -58,6 +58,10 @@ duplicam `VIEW_SHEET.etf`/`VIEW_FIRST_ROW`/o layout de `marketColumns` em
   (`SpreadsheetApp`, `UrlFetchApp`, `Utilities`, `ScriptApp`).
 - Os nomes de aba em `SHEETS` e os intervalos em `CLASS_TOTAL_RANGES` precisam
   bater **exatamente** com `src/sheets/schema.ts`. Renomeou lá, renomeie aqui.
+- `DASHBOARD_PRIVACY_COL` é a coluna do checkbox de privacidade no Painel,
+  duplicada de `DASHBOARD.privacyCheckboxColumn`. Mexeu no layout do Painel e
+  ela andou? O `onEdit` só volta a espelhar o clique para `Config` depois que o
+  `Code.gs` novo for colado no editor — o instalador não alcança o script.
 - `SpreadsheetApp.flush()` antes de ler valor de fórmula, senão o snapshot lê o
   estado anterior.
 

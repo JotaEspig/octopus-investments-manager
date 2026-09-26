@@ -5,8 +5,11 @@ import {
   CLASS_CURRENCY,
   CONFIG_PRIVACY_ROW,
   DASHBOARD,
+  DASHBOARD_TABLE_COLUMNS,
   DATA_SHEETS,
+  GAIN_HEADERS,
   NUMBER_FORMAT,
+  RETURN_PERCENT_HEADER,
   SHEET,
   VIEW_FIRST_ROW,
   VIEW_ROWS,
@@ -244,10 +247,12 @@ function headerUnderline(sheetId: number, row: number, columnCount: number): she
   }
 }
 
-/** Verde para ganho, vermelho para perda. */
-function returnColors(sheetId: number, columnIndex: number): sheets_v4.Schema$Request[] {
-  const range = grid(sheetId, VIEW_FIRST_ROW - 1, VIEW_FIRST_ROW + VIEW_ROWS - 1, columnIndex, columnIndex + 1)
-
+/**
+ * Verde acima de zero, vermelho abaixo. Serve tanto para rendimento quanto
+ * para desvio da meta — em ambos o sinal é a informação, e é o mesmo par de
+ * regras em todos os lugares onde um número pode ser negativo.
+ */
+function signColors(range: sheets_v4.Schema$GridRange): sheets_v4.Schema$Request[] {
   const rule = (type: string, hex: string) => ({
     addConditionalFormatRule: {
       rule: {
@@ -261,6 +266,13 @@ function returnColors(sheetId: number, columnIndex: number): sheets_v4.Schema$Re
   })
 
   return [rule('NUMBER_GREATER', PALETTE.positive), rule('NUMBER_LESS', PALETTE.negative)]
+}
+
+/** O mesmo, na área de dados de uma coluna inteira de aba de classe. */
+function returnColors(sheetId: number, columnIndex: number): sheets_v4.Schema$Request[] {
+  return signColors(
+    grid(sheetId, VIEW_FIRST_ROW - 1, VIEW_FIRST_ROW + VIEW_ROWS - 1, columnIndex, columnIndex + 1),
+  )
 }
 
 /**
@@ -542,10 +554,12 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
       requests.push(...columnStyle(sheetId, index, VIEW_FIRST_ROW, format, column.width, column.align))
     }
 
-    // Total da aba, na linha 1: destacado, sempre em reais.
+    // Resumo da classe, na linha 1: rótulo, rendimento % e total, os três
+    // destacados. O rendimento fica sobre a coluna "Rendimento %" e o total
+    // sobre "Valor (R$)" — o rótulo é a célula imediatamente à esquerda.
     requests.push({
       repeatCell: {
-        range: grid(sheetId, 0, 1, spec.totalColumn - 1, spec.totalColumn + 1),
+        range: grid(sheetId, 0, 1, spec.returnColumn - 1, spec.totalColumn + 1),
         cell: {
           userEnteredFormat: {
             backgroundColor: rgb(PALETTE.highlight),
@@ -558,13 +572,23 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
     })
     requests.push({
       repeatCell: {
+        range: grid(sheetId, 0, 1, spec.returnColumn, spec.returnColumn + 1),
+        cell: { userEnteredFormat: { numberFormat: NUMBER_FORMAT.percent! } },
+        fields: 'userEnteredFormat.numberFormat',
+      },
+    })
+    requests.push({
+      repeatCell: {
         range: grid(sheetId, 0, 1, spec.totalColumn, spec.totalColumn + 1),
         cell: { userEnteredFormat: { numberFormat: NUMBER_FORMAT.brl! } },
         fields: 'userEnteredFormat.numberFormat',
       },
     })
+    // Sobrepõe a cor da classe quando há sinal — no resumo, saber se a classe
+    // está no azul ou no vermelho vale mais que a cor da aba.
+    requests.push(...signColors(grid(sheetId, 0, 1, spec.returnColumn, spec.returnColumn + 1)))
 
-    for (const header of ['Rendimento', 'Rendimento %', 'Rendimento (R$)']) {
+    for (const header of [...GAIN_HEADERS, RETURN_PERCENT_HEADER]) {
       const column = spec.columns.findIndex((candidate) => candidate.header === header)
       if (column >= 0) requests.push(...returnColors(sheetId, column))
     }
@@ -738,14 +762,18 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
       },
     })
 
-    requests.push(...headerRow(dashboardId, DASHBOARD.allocationHeaderRow, 5, PALETTE.dashboard))
-    requests.push(headerUnderline(dashboardId, DASHBOARD.allocationHeaderRow, 5))
+    requests.push(
+      ...headerRow(dashboardId, DASHBOARD.allocationHeaderRow, DASHBOARD_TABLE_COLUMNS, PALETTE.dashboard),
+    )
+    requests.push(headerUnderline(dashboardId, DASHBOARD.allocationHeaderRow, DASHBOARD_TABLE_COLUMNS))
     // `allocationLast`, sem +1: o padrão usado em `VIEW_SHEETS` é bandear até
     // a ÚLTIMA linha de dado, exclusive. Um `+1` aqui vazaria a listra pra
     // dentro da linha em branco que separa esta tabela da de objetivo.
-    requests.push(banding(dashboardId, allocationFirst, allocationLast, 5))
+    requests.push(banding(dashboardId, allocationFirst, allocationLast, DASHBOARD_TABLE_COLUMNS))
     requests.push(
-      outerBorder(grid(dashboardId, DASHBOARD.allocationHeaderRow - 1, allocationLast, 0, 5)),
+      outerBorder(
+        grid(dashboardId, DASHBOARD.allocationHeaderRow - 1, allocationLast, 0, DASHBOARD_TABLE_COLUMNS),
+      ),
     )
 
     // Cada linha da alocação recebe a cor da sua classe, casando com a aba.
@@ -774,7 +802,7 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
     })
     requests.push({
       repeatCell: {
-        range: grid(dashboardId, allocationFirst - 1, allocationLast, 2, 5),
+        range: grid(dashboardId, allocationFirst - 1, allocationLast, 2, DASHBOARD_TABLE_COLUMNS),
         cell: {
           userEnteredFormat: { numberFormat: NUMBER_FORMAT.percent!, horizontalAlignment: 'RIGHT' },
         },
@@ -785,32 +813,24 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
       ...privacyMaskBanded(grid(dashboardId, allocationFirst - 1, allocationLast, 1, 2), allocationFirst),
     )
 
-    // Desvio da meta: verde acima, vermelho abaixo.
-    const driftRange = grid(dashboardId, allocationFirst - 1, allocationLast, 4, 5)
-    for (const [type, hex] of [
-      ['NUMBER_GREATER', PALETTE.positive],
-      ['NUMBER_LESS', PALETTE.negative],
-    ] as const) {
-      requests.push({
-        addConditionalFormatRule: {
-          rule: {
-            ranges: [driftRange],
-            booleanRule: {
-              condition: { type, values: [{ userEnteredValue: '0' }] },
-              format: { textFormat: { bold: true, foregroundColor: rgb(hex) } },
-            },
-          },
-        },
-      })
+    // Desvio da meta e rendimento: verde acima de zero, vermelho abaixo.
+    for (const column of [DASHBOARD.driftColumn, DASHBOARD.returnColumn]) {
+      requests.push(
+        ...signColors(grid(dashboardId, allocationFirst - 1, allocationLast, column, column + 1)),
+      )
     }
 
     // Tabela de ativos, abaixo dos gráficos.
     const assetsLast = DASHBOARD.assetsFirstRow + VIEW_ROWS
     requests.push(titleCell(dashboardId, DASHBOARD.assetsTitleRow, PALETTE.dashboard, 13))
-    requests.push(...headerRow(dashboardId, DASHBOARD.assetsHeaderRow, 5, PALETTE.dashboard))
-    requests.push(headerUnderline(dashboardId, DASHBOARD.assetsHeaderRow, 5))
-    requests.push(banding(dashboardId, DASHBOARD.assetsFirstRow, assetsLast, 5))
-    requests.push(outerBorder(grid(dashboardId, DASHBOARD.assetsHeaderRow - 1, assetsLast, 0, 5)))
+    requests.push(
+      ...headerRow(dashboardId, DASHBOARD.assetsHeaderRow, DASHBOARD_TABLE_COLUMNS, PALETTE.dashboard),
+    )
+    requests.push(headerUnderline(dashboardId, DASHBOARD.assetsHeaderRow, DASHBOARD_TABLE_COLUMNS))
+    requests.push(banding(dashboardId, DASHBOARD.assetsFirstRow, assetsLast, DASHBOARD_TABLE_COLUMNS))
+    requests.push(
+      outerBorder(grid(dashboardId, DASHBOARD.assetsHeaderRow - 1, assetsLast, 0, DASHBOARD_TABLE_COLUMNS)),
+    )
     requests.push({
       repeatCell: {
         range: grid(dashboardId, DASHBOARD.assetsFirstRow - 1, assetsLast, 1, 2),
@@ -820,15 +840,30 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
         fields: 'userEnteredFormat(numberFormat,horizontalAlignment)',
       },
     })
-    requests.push({
-      repeatCell: {
-        range: grid(dashboardId, DASHBOARD.assetsFirstRow - 1, assetsLast, 3, 4),
-        cell: {
-          userEnteredFormat: { numberFormat: NUMBER_FORMAT.percent!, horizontalAlignment: 'RIGHT' },
+    // "% da carteira" e "Rendimento %" — separadas porque "Classe" e
+    // "Objetivo", que são texto, ficam entre as duas.
+    for (const column of [3, DASHBOARD.returnColumn]) {
+      requests.push({
+        repeatCell: {
+          range: grid(dashboardId, DASHBOARD.assetsFirstRow - 1, assetsLast, column, column + 1),
+          cell: {
+            userEnteredFormat: { numberFormat: NUMBER_FORMAT.percent!, horizontalAlignment: 'RIGHT' },
+          },
+          fields: 'userEnteredFormat(numberFormat,horizontalAlignment)',
         },
-        fields: 'userEnteredFormat(numberFormat,horizontalAlignment)',
-      },
-    })
+      })
+    }
+    requests.push(
+      ...signColors(
+        grid(
+          dashboardId,
+          DASHBOARD.assetsFirstRow - 1,
+          assetsLast,
+          DASHBOARD.returnColumn,
+          DASHBOARD.returnColumn + 1,
+        ),
+      ),
+    )
     requests.push(
       ...privacyMaskBanded(
         grid(dashboardId, DASHBOARD.assetsFirstRow - 1, assetsLast, 1, 2),
@@ -847,7 +882,9 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
       })
     }
 
-    for (const [index, width] of [220, 150, 150, 120, 210].entries()) {
+    // A:F — a tabela de ativos é a mais larga das três, então é ela que manda
+    // na largura das colunas que as três compartilham.
+    for (const [index, width] of [220, 150, 150, 120, 210, 130].entries()) {
       requests.push({
         updateDimensionProperties: {
           range: { sheetId: dashboardId, dimension: 'COLUMNS', startIndex: index, endIndex: index + 1 },
@@ -858,20 +895,24 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
     }
 
     // Tabela de alocação por objetivo — logo ABAIXO da de classe, mesma
-    // largura (A:E). Sem cor por linha, diferente da tabela de classe:
+    // largura (A:F). Sem cor por linha, diferente da tabela de classe:
     // objetivo não tem uma aba própria para casar a cor. Coluna A já fica
     // larga o bastante (220px, ajustada mais abaixo para a tabela de
     // ativos) para rótulos longos como "Proteção — sistêmica/moeda".
     const objectivesFirst = DASHBOARD.objectivesFirstRow
     const objectivesLast = objectivesFirst + OBJECTIVES.length - 1
 
-    requests.push(...headerRow(dashboardId, DASHBOARD.objectivesHeaderRow, 5, PALETTE.dashboard))
-    requests.push(headerUnderline(dashboardId, DASHBOARD.objectivesHeaderRow, 5))
+    requests.push(
+      ...headerRow(dashboardId, DASHBOARD.objectivesHeaderRow, DASHBOARD_TABLE_COLUMNS, PALETTE.dashboard),
+    )
+    requests.push(headerUnderline(dashboardId, DASHBOARD.objectivesHeaderRow, DASHBOARD_TABLE_COLUMNS))
     // Mesmo motivo do `banding` da tabela de classe: sem +1, pra não vazar
     // listra pra dentro da linha em branco antes da tabela de ativos.
-    requests.push(banding(dashboardId, objectivesFirst, objectivesLast, 5))
+    requests.push(banding(dashboardId, objectivesFirst, objectivesLast, DASHBOARD_TABLE_COLUMNS))
     requests.push(
-      outerBorder(grid(dashboardId, DASHBOARD.objectivesHeaderRow - 1, objectivesLast, 0, 5)),
+      outerBorder(
+        grid(dashboardId, DASHBOARD.objectivesHeaderRow - 1, objectivesLast, 0, DASHBOARD_TABLE_COLUMNS),
+      ),
     )
 
     requests.push({
@@ -885,7 +926,7 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
     })
     requests.push({
       repeatCell: {
-        range: grid(dashboardId, objectivesFirst - 1, objectivesLast, 2, 5),
+        range: grid(dashboardId, objectivesFirst - 1, objectivesLast, 2, DASHBOARD_TABLE_COLUMNS),
         cell: {
           userEnteredFormat: { numberFormat: NUMBER_FORMAT.percent!, horizontalAlignment: 'RIGHT' },
         },
@@ -896,25 +937,16 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
       ...privacyMaskBanded(grid(dashboardId, objectivesFirst - 1, objectivesLast, 1, 2), objectivesFirst),
     )
 
-    const objectivesDriftRange = grid(dashboardId, objectivesFirst - 1, objectivesLast, 4, 5)
-    for (const [type, hex] of [
-      ['NUMBER_GREATER', PALETTE.positive],
-      ['NUMBER_LESS', PALETTE.negative],
-    ] as const) {
-      requests.push({
-        addConditionalFormatRule: {
-          rule: {
-            ranges: [objectivesDriftRange],
-            booleanRule: {
-              condition: { type, values: [{ userEnteredValue: '0' }] },
-              format: { textFormat: { bold: true, foregroundColor: rgb(hex) } },
-            },
-          },
-        },
-      })
+    for (const column of [DASHBOARD.driftColumn, DASHBOARD.returnColumn]) {
+      requests.push(
+        ...signColors(grid(dashboardId, objectivesFirst - 1, objectivesLast, column, column + 1)),
+      )
     }
 
-    actions.push('Painel estilizado: totais em destaque, alocação por classe e por objetivo, e tabela de ativos')
+    actions.push(
+      'Painel estilizado: totais em destaque, alocação e rendimento por classe e por objetivo, ' +
+        'e tabela de ativos',
+    )
   }
 
   // --- Grade off: com listras e bordas ela vira ruído --------------------

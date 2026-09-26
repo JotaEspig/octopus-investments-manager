@@ -8,6 +8,7 @@ import {
   DASHBOARD_ALLOCATION_HEADERS,
   DASHBOARD_ASSETS_HEADERS,
   DASHBOARD_OBJECTIVE_HEADERS,
+  DASHBOARD_TABLE_COLUMNS,
   DATA_SHEETS,
   DIALECT_PROBE,
   DIALECT_PROBE_EXPECTED,
@@ -23,6 +24,7 @@ import {
   VIEW_SHEETS,
   dashboardAssetsFormula,
   localizeValue,
+  objectiveReturnFormula,
   objectiveTotalFormula,
   ref,
   type DataSheetSpec,
@@ -103,10 +105,16 @@ function dataSheetHeader(spec: DataSheetSpec): ValueRange {
  * A coluna A recebe UMA fórmula (o FILTER que derrama a lista de ativos para
  * baixo) e as demais recebem uma fórmula por linha. Por isso A4 em diante fica
  * em branco: se houvesse algo ali, o derrame bateria e viraria #REF!.
+ *
+ * A LINHA 1 é o resumo da classe, e cada número cai exatamente sobre a coluna
+ * que mostra a mesma conta ativo a ativo: o rendimento % sobre "Rendimento %",
+ * o total sobre "Valor (R$)". O rótulo "Total" fica à esquerda dos dois —
+ * cobre os dois, por isso não diz mais "(R$)".
  */
 function viewSheetContent(spec: ViewSheetSpec): ValueRange[] {
   const lastColumn = columnLetter(spec.columns.length - 1)
   const totalColumnLetter = columnLetter(spec.totalColumn)
+  const returnColumnLetter = columnLetter(spec.returnColumn)
   const lastRow = VIEW_FIRST_ROW + VIEW_ROWS - 1
 
   const rows: unknown[][] = []
@@ -116,11 +124,17 @@ function viewSheetContent(spec: ViewSheetSpec): ValueRange[] {
 
   return [
     { range: ref(spec.title, 'A1'), values: [[spec.title]] },
+    // Três células escritas à parte, e não um intervalo de uma vez: assim a
+    // posição de cada uma sai do `spec`, sem depender de as colunas serem
+    // vizinhas nesta ordem.
     {
-      range: ref(spec.title, `${columnLetter(spec.totalColumn - 1)}1:${totalColumnLetter}1`),
-      values: [
-        ['Total (R$)', `=SUM(${totalColumnLetter}${VIEW_FIRST_ROW}:${totalColumnLetter}${lastRow})`],
-      ],
+      range: ref(spec.title, `${columnLetter(spec.returnColumn - 1)}1`),
+      values: [['Total']],
+    },
+    { range: ref(spec.title, `${returnColumnLetter}1`), values: [[spec.classReturnFormula]] },
+    {
+      range: ref(spec.title, `${totalColumnLetter}1`),
+      values: [[`=SUM(${totalColumnLetter}${VIEW_FIRST_ROW}:${totalColumnLetter}${lastRow})`]],
     },
     {
       range: ref(spec.title, `A2:${lastColumn}2`),
@@ -135,6 +149,7 @@ function viewSheetContent(spec: ViewSheetSpec): ValueRange[] {
 }
 
 function dashboardContent(): ValueRange[] {
+  const lastTableColumn = columnLetter(DASHBOARD_TABLE_COLUMNS - 1)
   const firstRow = DASHBOARD.allocationFirstRow
   const lastRow = firstRow + ASSET_CLASSES.length - 1
 
@@ -147,10 +162,13 @@ function dashboardContent(): ValueRange[] {
       `=IFERROR($B${row}/$B$${DASHBOARD.totalRow};0)`,
       `=IFERROR(VLOOKUP("target_${assetClass}";${ref(SHEET.config, '$A:$B')};2;FALSE);0)`,
       `=$C${row}-$D${row}`,
+      // Pelo NOME, como o total ao lado: é a mesma célula que a aba da classe
+      // mostra na linha 1, não uma segunda conta que poderia divergir dela.
+      `=${view.returnRangeName}`,
     ]
   })
 
-  // Tabela de objetivo, logo ABAIXO da de classe — mesma largura (A:E), uma
+  // Tabela de objetivo, logo ABAIXO da de classe — mesma largura (A:F), uma
   // linha em branco entre as duas (ver `DASHBOARD.objectivesHeaderRow`).
   const objFirstRow = DASHBOARD.objectivesFirstRow
   const objLastRow = objFirstRow + OBJECTIVES.length - 1
@@ -163,6 +181,9 @@ function dashboardContent(): ValueRange[] {
       `=IFERROR($B${row}/$B$${DASHBOARD.totalRow};0)`,
       `=IFERROR(VLOOKUP("target_goal_${objective}";${ref(SHEET.config, '$A:$B')};2;FALSE);0)`,
       `=$C${row}-$D${row}`,
+      // Não há intervalo nomeado por objetivo: o objetivo cruza as classes, e
+      // a soma acontece aqui (ver `objectiveReturnFormula`).
+      objectiveReturnFormula(objective),
     ]
   })
 
@@ -192,21 +213,30 @@ function dashboardContent(): ValueRange[] {
       ],
     },
     {
-      range: ref(DASHBOARD.title, `A${DASHBOARD.allocationHeaderRow}:E${DASHBOARD.allocationHeaderRow}`),
+      range: ref(
+        DASHBOARD.title,
+        `A${DASHBOARD.allocationHeaderRow}:${lastTableColumn}${DASHBOARD.allocationHeaderRow}`,
+      ),
       values: [DASHBOARD_ALLOCATION_HEADERS],
     },
-    { range: ref(DASHBOARD.title, `A${firstRow}:E${lastRow}`), values: allocationRows },
+    { range: ref(DASHBOARD.title, `A${firstRow}:${lastTableColumn}${lastRow}`), values: allocationRows },
     {
-      range: ref(DASHBOARD.title, `A${DASHBOARD.objectivesHeaderRow}:E${DASHBOARD.objectivesHeaderRow}`),
+      range: ref(
+        DASHBOARD.title,
+        `A${DASHBOARD.objectivesHeaderRow}:${lastTableColumn}${DASHBOARD.objectivesHeaderRow}`,
+      ),
       values: [DASHBOARD_OBJECTIVE_HEADERS],
     },
-    { range: ref(DASHBOARD.title, `A${objFirstRow}:E${objLastRow}`), values: objectiveRows },
+    { range: ref(DASHBOARD.title, `A${objFirstRow}:${lastTableColumn}${objLastRow}`), values: objectiveRows },
     {
       range: ref(DASHBOARD.title, `A${DASHBOARD.assetsTitleRow}`),
       values: [['Ativos']],
     },
     {
-      range: ref(DASHBOARD.title, `A${DASHBOARD.assetsHeaderRow}:E${DASHBOARD.assetsHeaderRow}`),
+      range: ref(
+        DASHBOARD.title,
+        `A${DASHBOARD.assetsHeaderRow}:${lastTableColumn}${DASHBOARD.assetsHeaderRow}`,
+      ),
       values: [DASHBOARD_ASSETS_HEADERS],
     },
     {
@@ -567,12 +597,10 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
   const namedTargets: Array<{ name: string; sheetTitle: string; row: number; column: number }> = [
     { name: NAMED_RANGE.fx, sheetTitle: SHEET.config, row: CONFIG_FX_ROW, column: 1 },
     { name: NAMED_RANGE.total, sheetTitle: DASHBOARD.title, row: DASHBOARD.totalRow, column: 1 },
-    ...VIEW_SHEETS.map((spec) => ({
-      name: spec.totalRangeName,
-      sheetTitle: spec.title,
-      row: 1,
-      column: spec.totalColumn,
-    })),
+    ...VIEW_SHEETS.flatMap((spec) => [
+      { name: spec.totalRangeName, sheetTitle: spec.title, row: 1, column: spec.totalColumn },
+      { name: spec.returnRangeName, sheetTitle: spec.title, row: 1, column: spec.returnColumn },
+    ]),
   ]
 
   for (const target of namedTargets) {

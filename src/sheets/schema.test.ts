@@ -1,14 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { ASSET_CLASSES } from '@/domain/types'
+import { ASSET_CLASSES, OBJECTIVE_LABELS } from '@/domain/types'
 import {
+  DASHBOARD,
+  DASHBOARD_ALLOCATION_HEADERS,
+  DASHBOARD_ASSETS_HEADERS,
+  DASHBOARD_OBJECTIVE_HEADERS,
+  DASHBOARD_TABLE_COLUMNS,
   DIALECT_PROBE,
   FALLBACK_TIME_ZONE,
   FORMULA_TOKEN,
+  RETURN_PERCENT_HEADER,
   VIEW_FIRST_ROW,
   VIEW_SHEETS,
   dashboardAssetsFormula,
   localizeFormula,
   localizeValue,
+  objectiveReturnFormula,
   ref,
   resolveTimeZone,
 } from './schema'
@@ -114,6 +121,13 @@ describe('abas de apresentação', () => {
     }
   })
 
+  it('a coluna-chave tem a mesma largura em todas', () => {
+    // Renda Fixa já teve a coluna A mais larga que as outras, e trocar de aba
+    // deslocava a lista inteira para o lado.
+    const widths = new Set(VIEW_SHEETS.map((spec) => spec.columns[0]!.width))
+    expect(widths.size).toBe(1)
+  })
+
   it('o total aponta para "Valor (R$)", não para a última coluna', () => {
     // A coluna "% da classe" entrou DEPOIS do total; se o índice fosse
     // `length - 1`, o intervalo nomeado passaria a somar porcentagens.
@@ -164,11 +178,101 @@ describe('dashboardAssetsFormula', () => {
     }
   })
 
-  it('dá a cada bloco um fallback de 5 colunas', () => {
+  it('dá a cada bloco um fallback com uma coluna por cabeçalho da tabela', () => {
     // Sem o fallback, uma classe sem ativos devolve #N/A e derruba a pilha
-    // inteira — a tabela some por causa de uma seção vazia.
+    // inteira — a tabela some por causa de uma seção vazia. E ele precisa ter
+    // exatamente a largura da tabela, senão a pilha fica irregular.
     const separator = FORMULA_TOKEN.arrayColumn
-    const fallback = `{""${separator}0${separator}""${separator}0${separator}""}`
+    const fallback = `{""${separator}0${separator}""${separator}0${separator}""${separator}0}`
+    expect(fallback.split(separator)).toHaveLength(DASHBOARD_ASSETS_HEADERS.length)
     expect(formula.split(fallback)).toHaveLength(VIEW_SHEETS.length + 1)
+  })
+
+  it('leva o rendimento % de cada aba, em vez de recalculá-lo', () => {
+    // O número da tabela de ativos é o MESMO que a aba de classe mostra: uma
+    // segunda conta aqui poderia divergir dela sem ninguém notar.
+    for (const spec of VIEW_SHEETS) {
+      const letter = String.fromCharCode(65 + spec.returnColumn)
+      expect(formula).toContain(ref(spec.title, `$${letter}$${VIEW_FIRST_ROW}`))
+    }
+  })
+})
+
+describe('rendimento % agregado', () => {
+  it('a linha 1 da aba fica exatamente sobre as colunas que ela resume', () => {
+    // O rótulo "Total" mora à esquerda do rendimento, e o rendimento à
+    // esquerda do total: o bloco da linha 1 é contíguo, e `styling.ts` pinta
+    // os três de uma vez só.
+    for (const spec of VIEW_SHEETS) {
+      expect(spec.columns[spec.returnColumn]!.header).toBe(RETURN_PERCENT_HEADER)
+      expect(spec.returnColumn + 1).toBe(spec.totalColumn)
+      expect(spec.returnColumn - 1).toBeGreaterThanOrEqual(0)
+    }
+  })
+
+  it('divide ganho por custo, e não faz média de porcentagens', () => {
+    // Média de porcentagens daria o mesmo peso a uma posição de mil reais e a
+    // uma de cem. A razão das somas é o rendimento de verdade do conjunto.
+    for (const spec of VIEW_SHEETS) {
+      const gain = spec.columns[spec.gainColumn]!.header
+      const cost = spec.columns[spec.costColumn]!.header
+      expect(gain).toMatch(/^Rendimento/)
+      expect(gain).not.toBe(RETURN_PERCENT_HEADER)
+      expect(['Custo total', 'Aplicado (R$)']).toContain(cost)
+      expect(spec.classReturnFormula).not.toContain('AVERAGE')
+      expect(isBalanced(spec.classReturnFormula), spec.title).toBe(true)
+    }
+  })
+
+  it('converte a classe de moeda mista linha a linha, não em bloco', () => {
+    // ETF tem ativo em dólar e ativo na B3 lado a lado: somar as duas colunas
+    // e multiplicar tudo por CAMBIO inflaria a parte que já está em reais.
+    const etf = VIEW_SHEETS.find((spec) => spec.assetClass === 'etf')!
+    expect(etf.classReturnFormula).toContain('"USD"')
+    expect(etf.classReturnFormula).toContain('"<>USD"')
+
+    const brStock = VIEW_SHEETS.find((spec) => spec.assetClass === 'br_stock')!
+    expect(brStock.classReturnFormula).not.toContain('CAMBIO')
+  })
+
+  it('o rendimento por objetivo soma as cinco abas', () => {
+    // O objetivo cruza as classes — o mesmo objetivo aparece em ação, ETF e
+    // renda fixa, então nenhum intervalo nomeado por aba serve aqui.
+    const formula = objectiveReturnFormula('growth')
+    for (const spec of VIEW_SHEETS) {
+      expect(formula, spec.title).toContain(ref(spec.title, ''))
+    }
+    expect(formula).toContain(`"${OBJECTIVE_LABELS.growth}"`)
+    for (const dialect of ['semicolon', 'comma'] as const) {
+      expect(isBalanced(localizeFormula(formula, dialect)), dialect).toBe(true)
+    }
+  })
+
+  it('cada aba de classe tem um intervalo nomeado próprio para o rendimento', () => {
+    const names = VIEW_SHEETS.map((spec) => spec.returnRangeName)
+    expect(new Set(names).size).toBe(VIEW_SHEETS.length)
+    for (const name of names) expect(name).toMatch(/^[A-Z_]+$/)
+  })
+})
+
+describe('tabelas do Painel', () => {
+  it('as três têm a mesma largura', () => {
+    // É o que faz as três lerem como uma coluna só de cima a baixo — e o que
+    // `styling.ts` usa para pintar cabeçalho, listra e borda.
+    for (const headers of [
+      DASHBOARD_ALLOCATION_HEADERS,
+      DASHBOARD_OBJECTIVE_HEADERS,
+      DASHBOARD_ASSETS_HEADERS,
+    ]) {
+      expect(headers).toHaveLength(DASHBOARD_TABLE_COLUMNS)
+      expect(headers[DASHBOARD.returnColumn]).toBe(RETURN_PERCENT_HEADER)
+    }
+  })
+
+  it('o controle de privacidade e os gráficos ficam fora das tabelas', () => {
+    // Coluna de tabela e controle na mesma coluna brigariam por largura.
+    expect(DASHBOARD.privacyLabelColumn).toBeGreaterThanOrEqual(DASHBOARD_TABLE_COLUMNS)
+    expect(DASHBOARD.privacyCheckboxColumn).toBe(DASHBOARD.privacyLabelColumn + 1)
+    expect(DASHBOARD.chartsColumn).toBeGreaterThanOrEqual(DASHBOARD_TABLE_COLUMNS)
   })
 })

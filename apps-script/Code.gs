@@ -52,7 +52,7 @@ const PRIVACY_MODE_KEY = 'privacy_mode'
 
 /** Linha e coluna (1-based) do checkbox de modo privacidade no Painel. Igual ao schema.ts. */
 const DASHBOARD_PRIVACY_ROW = 1
-const DASHBOARD_PRIVACY_COL = 7 // G — privacyCheckboxColumn (0-based 6) + 1
+const DASHBOARD_PRIVACY_COL = 8 // H — privacyCheckboxColumn (0-based 7) + 1
 
 /** Título do gráfico de patrimônio. Igual a HISTORY_CHART_TITLE em schema.ts. */
 const HISTORY_CHART_TITLE = 'Patrimônio — últimos meses'
