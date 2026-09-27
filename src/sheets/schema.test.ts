@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { ASSET_CLASSES, OBJECTIVE_LABELS } from '@/domain/types'
 import {
+  CHART_OFFSET_X_PIXELS,
+  CHART_WIDTH_PIXELS,
   DASHBOARD,
   DASHBOARD_ALLOCATION_HEADERS,
   DASHBOARD_ASSETS_HEADERS,
   DASHBOARD_OBJECTIVE_HEADERS,
+  DASHBOARD_PERFORMANCE_HEADERS,
+  DASHBOARD_PERFORMANCE_WIDTHS,
   DASHBOARD_TABLE_COLUMNS,
   DIALECT_PROBE,
   FALLBACK_TIME_ZONE,
@@ -274,5 +278,18 @@ describe('tabelas do Painel', () => {
     expect(DASHBOARD.privacyLabelColumn).toBeGreaterThanOrEqual(DASHBOARD_TABLE_COLUMNS)
     expect(DASHBOARD.privacyCheckboxColumn).toBe(DASHBOARD.privacyLabelColumn + 1)
     expect(DASHBOARD.chartsColumn).toBeGreaterThanOrEqual(DASHBOARD_TABLE_COLUMNS)
+  })
+
+  it('o quadro de rendimento fica alinhado com os gráficos embaixo dele', () => {
+    expect(DASHBOARD.performanceColumn).toBe(DASHBOARD.chartsColumn)
+    expect(DASHBOARD_PERFORMANCE_WIDTHS).toHaveLength(DASHBOARD_PERFORMANCE_HEADERS.length)
+    // A caixa do quadro passa da soma das colunas (borda por fora, linha de
+    // grade) — o gráfico acompanha a caixa, então é um pouco mais largo.
+    const columns = DASHBOARD_PERFORMANCE_WIDTHS.reduce((sum, width) => sum + width, 0)
+    expect(CHART_WIDTH_PIXELS).toBeGreaterThan(columns)
+    expect(CHART_WIDTH_PIXELS - columns).toBeLessThanOrEqual(4)
+    // Ancorado na coluna anterior, começa pouco antes da coluna do quadro.
+    expect(CHART_OFFSET_X_PIXELS).toBeLessThan(DASHBOARD.privacyCheckboxWidth)
+    expect(CHART_OFFSET_X_PIXELS).toBeGreaterThanOrEqual(0)
   })
 })

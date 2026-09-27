@@ -1006,6 +1006,11 @@ export const DASHBOARD = {
   privacyLabelColumn: 6,
   /** Coluna (0-based) do checkbox em si. Espelhada em `apps-script/Code.gs`. */
   privacyCheckboxColumn: 7,
+  /**
+   * Largura (px) da coluna do checkbox. Os gráficos se ancoram nela e andam
+   * esta distância para a direita — ver `CHART_OFFSET_X_PIXELS`.
+   */
+  privacyCheckboxWidth: 40,
   /** Linha do cabeçalho da tabela de alocação por classe. */
   allocationHeaderRow: 7,
   /** Primeira linha de classe. */
@@ -1040,8 +1045,13 @@ export const DASHBOARD = {
    * Coluna (0-based) onde os dois gráficos ficam, empilhados à DIREITA das
    * tabelas — linha de patrimônio em cima, pizza de alocação embaixo. Longe
    * de A:F (as tabelas) e de G/H (controle de privacidade, linha 1 só).
+   *
+   * É a MESMA coluna do quadro de rendimento (`performanceColumn`): gráficos e
+   * quadro formam uma coluna só. O gráfico se ancora na coluna anterior com
+   * deslocamento (`CHART_OFFSET_X_PIXELS`) e tem a largura da caixa do quadro
+   * (`CHART_WIDTH_PIXELS`), para as bordas coincidirem dos dois lados.
    */
-  chartsColumn: 7,
+  chartsColumn: 8,
   /**
    * Quadro de rendimento × CDI — no TOPO, à direita do bloco de totais e
    * acima dos dois gráficos: é a primeira leitura de "como a carteira vai",
@@ -1064,8 +1074,8 @@ export const DASHBOARD = {
    */
   allocationChartRow: 25,
   /**
-   * Coluna (0-based) do rótulo do quadro. Uma à direita de `chartsColumn`: a
-   * H é a do checkbox de privacidade, estreita demais (40 px) para rótulo.
+   * Coluna (0-based) do rótulo do quadro — a mesma dos gráficos. Não a H: ela
+   * é a do checkbox de privacidade, estreita demais (40 px) para rótulo.
    */
   performanceColumn: 8,
   /**
@@ -1248,6 +1258,38 @@ export const EVOLUTION_DATA_HEADERS = ['Semana', 'Carteira', 'Mesmo dinheiro 100
 export const EVOLUTION_CHART_ROWS = 60
 
 export const DASHBOARD_PERFORMANCE_HEADERS = ['Rendimento', 'Carteira', 'CDI', 'CAGR (a.a.)']
+
+/**
+ * Largura de cada coluna do quadro de rendimento. O rótulo leva 270 px — cabe
+ * o mais longo, "Desde mm/aaaa (menos de 12 meses)", em negrito — e o resto
+ * se divide entre os três percentuais.
+ */
+export const DASHBOARD_PERFORMANCE_WIDTHS = [270, 110, 110, 110]
+
+/**
+ * Quanto a caixa do quadro passa da soma das colunas, medido num print da
+ * planilha: a borda externa (1 px) é desenhada POR FORA das células, dos dois
+ * lados, e a linha de grade soma mais 1 px à direita.
+ */
+const PERFORMANCE_BOX_OVERHANG = { left: 1, right: 2 }
+
+/**
+ * Os gráficos têm a largura da CAIXA do quadro, borda incluída — não só a soma
+ * das colunas. Com 600 px, a caixa sobrava ~1 px à esquerda e ~3 px à direita.
+ */
+export const CHART_WIDTH_PIXELS =
+  PERFORMANCE_BOX_OVERHANG.left +
+  DASHBOARD_PERFORMANCE_WIDTHS.reduce((sum, width) => sum + width, 0) +
+  PERFORMANCE_BOX_OVERHANG.right
+export const CHART_HEIGHT_PIXELS = 371
+
+/**
+ * Os gráficos se ancoram na coluna ANTERIOR à do quadro (a do checkbox) e
+ * andam para a direita até 1 px antes dela: o deslocamento não pode ser
+ * negativo, e é assim que o gráfico começa junto com a borda esquerda da
+ * caixa, que fica 1 px antes da coluna do quadro.
+ */
+export const CHART_OFFSET_X_PIXELS = DASHBOARD.privacyCheckboxWidth - PERFORMANCE_BOX_OVERHANG.left
 
 /**
  * Pedaços comuns às fórmulas de evolução — o espelho em fórmula de

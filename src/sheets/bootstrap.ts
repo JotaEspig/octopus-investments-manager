@@ -1,6 +1,9 @@
 import type { sheets_v4 } from 'googleapis'
 import { ASSET_CLASSES, ASSET_CLASS_LABELS, OBJECTIVES, OBJECTIVE_LABELS } from '@/domain/types'
 import {
+  CHART_HEIGHT_PIXELS,
+  CHART_OFFSET_X_PIXELS,
+  CHART_WIDTH_PIXELS,
   CLASS_ALLOCATION_CHART_TITLE,
   CONFIG_FX_ROW,
   CONFIG_ROWS,
@@ -293,7 +296,7 @@ const CDI_LINE_COLOR = { red: 0.74, green: 0.74, blue: 0.74 }
 
 export interface ChartDefinition {
   title: string
-  /** Linha (1-based) de âncora — a coluna é sempre `DASHBOARD.chartsColumn`. */
+  /** Linha (1-based) de âncora — a coluna é sempre a anterior a `DASHBOARD.chartsColumn`, com deslocamento. */
   anchorRow: number
   spec: sheets_v4.Schema$ChartSpec
 }
@@ -709,7 +712,16 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
       const anchorCell = {
         sheetId: dashboardId,
         rowIndex: definition.anchorRow - 1,
-        columnIndex: DASHBOARD.chartsColumn,
+        columnIndex: DASHBOARD.chartsColumn - 1,
+      }
+      // Posição e tamanho explícitos, reafirmados a cada instalação: é o que
+      // alinha os gráficos à caixa do quadro de rendimento acima deles.
+      const overlayPosition = {
+        anchorCell,
+        offsetXPixels: CHART_OFFSET_X_PIXELS,
+        offsetYPixels: 0,
+        widthPixels: CHART_WIDTH_PIXELS,
+        heightPixels: CHART_HEIGHT_PIXELS,
       }
       const existing = dashboardCharts.find((chart) => chart.spec?.title === definition.title)
 
@@ -717,11 +729,11 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
         structureRequests.push({
           updateEmbeddedObjectPosition: {
             objectId: existing.chartId,
-            newPosition: { overlayPosition: { anchorCell } },
+            newPosition: { overlayPosition },
             // Relativo a OverlayPosition, não a EmbeddedObjectPosition — o
             // prefixo "overlayPosition." é implícito e a API rejeita se ele
             // vier explícito (medido: "Invalid field: overlay_position").
-            fields: 'anchorCell',
+            fields: 'anchorCell,offsetXPixels,offsetYPixels,widthPixels,heightPixels',
           },
         })
         // A posição não é a única coisa que muda entre versões: eixo, série e
@@ -734,7 +746,7 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
         actions.push(`Gráfico reposicionado: ${definition.title}`)
       } else {
         structureRequests.push({
-          addChart: { chart: { spec: definition.spec, position: { overlayPosition: { anchorCell } } } },
+          addChart: { chart: { spec: definition.spec, position: { overlayPosition } } },
         })
         actions.push(`Gráfico criado: ${definition.title}`)
       }

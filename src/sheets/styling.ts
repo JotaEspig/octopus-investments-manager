@@ -6,6 +6,7 @@ import {
   CONFIG_PRIVACY_ROW,
   DASHBOARD,
   DASHBOARD_PERFORMANCE_HEADERS,
+  DASHBOARD_PERFORMANCE_WIDTHS,
   DASHBOARD_TABLE_COLUMNS,
   DATA_SHEETS,
   EVOLUTION_CHART_ROWS,
@@ -242,10 +243,15 @@ function banding(
 }
 
 /** Linha fina abaixo do cabeçalho, para separar sem poluir com grade cheia. */
-function headerUnderline(sheetId: number, row: number, columnCount: number): sheets_v4.Schema$Request {
+function headerUnderline(
+  sheetId: number,
+  row: number,
+  columnCount: number,
+  startColumn = 0,
+): sheets_v4.Schema$Request {
   return {
     updateBorders: {
-      range: grid(sheetId, row - 1, row, 0, columnCount),
+      range: grid(sheetId, row - 1, row, startColumn, startColumn + columnCount),
       bottom: { style: 'SOLID_MEDIUM', color: rgb(PALETTE.border) },
     },
   }
@@ -761,7 +767,7 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
           startIndex: DASHBOARD.privacyCheckboxColumn,
           endIndex: DASHBOARD.privacyCheckboxColumn + 1,
         },
-        properties: { pixelSize: 40 },
+        properties: { pixelSize: DASHBOARD.privacyCheckboxWidth },
         fields: 'pixelSize',
       },
     })
@@ -963,6 +969,12 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
         performanceStart,
       ),
     )
+    // O traço sob o cabeçalho, como nas tabelas da esquerda. Sem ele, o fundo
+    // do rótulo cobre a linha de grade logo abaixo do cabeçalho e as colunas
+    // sem fundo não: o rótulo parecia subir 2 px por cima do cabeçalho.
+    requests.push(
+      headerUnderline(dashboardId, DASHBOARD.performanceHeaderRow, performanceColumns, performanceStart),
+    )
     requests.push({
       repeatCell: {
         range: grid(
@@ -1009,7 +1021,8 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
         ),
       ),
     )
-    for (const [offset, width] of [220, 110, 110, 110].entries()) {
+    // Somam a largura dos gráficos — ver `DASHBOARD_PERFORMANCE_WIDTHS`.
+    for (const [offset, width] of DASHBOARD_PERFORMANCE_WIDTHS.entries()) {
       requests.push({
         updateDimensionProperties: {
           range: {
