@@ -9,16 +9,20 @@ import type {
   Trade,
   TradeKind,
 } from '@/domain/types'
+import type { CdiEntry } from '@/domain/fixed-income'
+import type { HistoryPoint } from '@/domain/performance'
 import { fromSheetDate, toSheetDate } from '@/lib/dates'
 import { parseNumber } from '@/lib/money'
 import type { AssetInput, FixedIncomeInput, TradeInput } from '@/lib/schemas'
 import { explainSheetsError, type SheetsContext } from './client'
 import {
   ASSETS_SHEET,
+  CDI_SHEET,
   CLASS_CURRENCY,
   CONFIG_SHEET,
   CURRENCY_HEADER,
   FIXED_INCOME_SHEET,
+  HISTORY_SHEET,
   NUMBER_FORMAT,
   QUOTES_SHEET,
   SHEET,
@@ -211,6 +215,49 @@ export async function readPortfolioData(context: SheetsContext): Promise<Portfol
     targets,
     objectiveTargets,
   }
+}
+
+/**
+ * Histórico do patrimônio e série do CDI, em ordem de data — o que a evolução
+ * da carteira contra o CDI precisa (`src/domain/performance.ts`).
+ *
+ * Fica fora de `readPortfolioData` de propósito: o MCP chama aquela a cada
+ * pergunta, e a série do CDI tem uma linha por dia útil.
+ */
+export async function readPerformanceSeries(
+  context: SheetsContext,
+): Promise<{ history: HistoryPoint[]; cdi: CdiEntry[] }> {
+  let response: sheets_v4.Schema$BatchGetValuesResponse
+  try {
+    const result = await context.api.spreadsheets.values.batchGet({
+      spreadsheetId: context.spreadsheetId,
+      ranges: [dataRange(HISTORY_SHEET), dataRange(CDI_SHEET)],
+      ...READ_OPTIONS,
+    })
+    response = result.data
+  } catch (error) {
+    throw new Error(explainSheetsError(error, context))
+  }
+
+  const [historyRows, cdiRows] = (response.valueRanges ?? []).map((range) => (range.values ?? []) as Row[])
+
+  const history = (historyRows ?? [])
+    .map((row) => ({
+      date: fromSheetDate(row[indexOf(HISTORY_SHEET, 'date')]),
+      totalBRL: parseNumber(row[indexOf(HISTORY_SHEET, 'totalBRL')]),
+    }))
+    .filter((point) => point.date)
+    .sort((a, b) => a.date.localeCompare(b.date))
+
+  const cdi = (cdiRows ?? [])
+    .map((row) => ({
+      date: fromSheetDate(row[indexOf(CDI_SHEET, 'date')]),
+      rateDaily: parseNumber(row[indexOf(CDI_SHEET, 'rateDaily')]),
+    }))
+    .filter((entry) => entry.date)
+    .sort((a, b) => a.date.localeCompare(b.date))
+
+  return { history, cdi }
 }
 
 // ---------------------------------------------------------------------------

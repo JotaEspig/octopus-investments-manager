@@ -135,7 +135,7 @@ echo "Pronto. Reinicie o Claude Code para carregar as skills, o agente e o servi
 echo
 echo "  Skills:  ${SKILLS[*]}"
 echo "  Agente:  ${AGENTS[*]}"
-echo "  MCP:     ${MCP_NAME} — portfolio_summary · positions · asset · trades · performance"
+echo "  MCP:     ${MCP_NAME} — portfolio_summary · positions · asset · trades · performance · evolution"
 echo "  Config:  ${CONFIG_FILE}"
 echo
 echo "  Interface (cadastro de operações):  cd ${REPO_DIR} && npm run dev"

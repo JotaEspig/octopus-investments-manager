@@ -13,6 +13,7 @@ aqui. Este arquivo só mapeia.
 | `fixed-income.ts` | Marcação na curva |
 | `returns.ts` | XIRR, retorno simples, nativo vs. BRL |
 | `history.ts` | `missingHistoryMonths` |
+| `performance.ts` | Evolução × CDI: linha "mesmo dinheiro no CDI", rentabilidade ponderada pelo tempo, CAGR |
 
 Cada um tem seu `.test.ts` ao lado.
 

@@ -5,8 +5,11 @@ import {
   CLASS_CURRENCY,
   CONFIG_PRIVACY_ROW,
   DASHBOARD,
+  DASHBOARD_PERFORMANCE_HEADERS,
   DASHBOARD_TABLE_COLUMNS,
   DATA_SHEETS,
+  EVOLUTION_CHART_ROWS,
+  EVOLUTION_DATA_HEADERS,
   GAIN_HEADERS,
   NUMBER_FORMAT,
   RETURN_PERCENT_HEADER,
@@ -133,11 +136,12 @@ function headerRow(
   row: number,
   columnCount: number,
   hex: string,
+  startColumn = 0,
 ): sheets_v4.Schema$Request[] {
   return [
     {
       repeatCell: {
-        range: grid(sheetId, row - 1, row, 0, columnCount),
+        range: grid(sheetId, row - 1, row, startColumn, startColumn + columnCount),
         cell: {
           userEnteredFormat: {
             backgroundColor: rgb(hex),
@@ -943,9 +947,153 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
       )
     }
 
+    // Quadro de rendimento, no topo, acima dos gráficos. Percentual não
+    // é sensível — fica visível com o modo privacidade ligado, como o
+    // "Rendimento %" das tabelas.
+    const performanceStart = DASHBOARD.performanceColumn
+    const performanceColumns = DASHBOARD_PERFORMANCE_HEADERS.length
+    const performanceFirst = DASHBOARD.performanceFirstRow
+    const performanceLast = performanceFirst + 1
+    requests.push(
+      ...headerRow(
+        dashboardId,
+        DASHBOARD.performanceHeaderRow,
+        performanceColumns,
+        PALETTE.dashboard,
+        performanceStart,
+      ),
+    )
+    requests.push({
+      repeatCell: {
+        range: grid(
+          dashboardId,
+          performanceFirst - 1,
+          performanceLast,
+          performanceStart,
+          performanceStart + 1,
+        ),
+        cell: {
+          userEnteredFormat: {
+            backgroundColor: rgb(PALETTE.highlight),
+            textFormat: { bold: true, foregroundColor: rgb(PALETTE.dashboard) },
+          },
+        },
+        fields: 'userEnteredFormat(backgroundColor,textFormat)',
+      },
+    })
+    const performanceValues = grid(
+      dashboardId,
+      performanceFirst - 1,
+      performanceLast,
+      performanceStart + 1,
+      performanceStart + performanceColumns,
+    )
+    requests.push({
+      repeatCell: {
+        range: performanceValues,
+        cell: {
+          userEnteredFormat: { numberFormat: NUMBER_FORMAT.percent!, horizontalAlignment: 'RIGHT' },
+        },
+        fields: 'userEnteredFormat(numberFormat,horizontalAlignment)',
+      },
+    })
+    requests.push(...signColors(performanceValues))
+    requests.push(
+      outerBorder(
+        grid(
+          dashboardId,
+          DASHBOARD.performanceHeaderRow - 1,
+          performanceLast,
+          performanceStart,
+          performanceStart + performanceColumns,
+        ),
+      ),
+    )
+    for (const [offset, width] of [220, 110, 110, 110].entries()) {
+      requests.push({
+        updateDimensionProperties: {
+          range: {
+            sheetId: dashboardId,
+            dimension: 'COLUMNS',
+            startIndex: performanceStart + offset,
+            endIndex: performanceStart + offset + 1,
+          },
+          properties: { pixelSize: width },
+          fields: 'pixelSize',
+        },
+      })
+    }
+
+    // Série do gráfico de patrimônio — bastidor, longe da vista, mas com
+    // formato certo (o eixo do gráfico herda o formato da célula) e com a
+    // máscara de privacidade: são valores absolutos.
+    const evolutionStart = DASHBOARD.evolutionDataColumn
+    const evolutionFirst = DASHBOARD.evolutionDataRow + 1
+    const evolutionLast = DASHBOARD.evolutionDataRow + EVOLUTION_CHART_ROWS
+    // Só o formato do cabeçalho, sem a altura de 32 px que `headerRow` também
+    // aplica: esta é a linha 1, a do título do Painel, que precisa de 40.
+    requests.push(
+      headerRow(
+        dashboardId,
+        DASHBOARD.evolutionDataRow,
+        EVOLUTION_DATA_HEADERS.length,
+        PALETTE.data,
+        evolutionStart,
+      )[0]!,
+    )
+    const evolutionFormats: Array<[ColumnFormat, number]> = [
+      ['date', 100],
+      ['brl', 130],
+      ['brl', 200],
+    ]
+    evolutionFormats.forEach(([format, width], offset) => {
+      requests.push({
+        repeatCell: {
+          range: grid(
+            dashboardId,
+            evolutionFirst - 1,
+            evolutionLast,
+            evolutionStart + offset,
+            evolutionStart + offset + 1,
+          ),
+          cell: {
+            userEnteredFormat: {
+              numberFormat: NUMBER_FORMAT[format]!,
+              horizontalAlignment: ALIGNMENT[format],
+            },
+          },
+          fields: 'userEnteredFormat(numberFormat,horizontalAlignment)',
+        },
+      })
+      requests.push({
+        updateDimensionProperties: {
+          range: {
+            sheetId: dashboardId,
+            dimension: 'COLUMNS',
+            startIndex: evolutionStart + offset,
+            endIndex: evolutionStart + offset + 1,
+          },
+          properties: { pixelSize: width },
+          fields: 'pixelSize',
+        },
+      })
+    })
+    requests.push(
+      privacyMaskFlat(
+        grid(
+          dashboardId,
+          evolutionFirst - 1,
+          evolutionLast,
+          evolutionStart + 1,
+          evolutionStart + EVOLUTION_DATA_HEADERS.length,
+        ),
+        PALETTE.bandEven,
+      ),
+    )
+
     actions.push(
       'Painel estilizado: totais em destaque, alocação e rendimento por classe e por objetivo, ' +
-        'e tabela de ativos',
+        'tabela de ativos e quadro de rendimento × CDI',
     )
   }
 

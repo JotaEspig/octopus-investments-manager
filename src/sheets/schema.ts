@@ -20,6 +20,7 @@ import {
   type Currency,
   type Objective,
 } from '@/domain/types'
+import { MIN_DAYS_FOR_CAGR, PERFORMANCE_WINDOW_MONTHS } from '@/domain/performance'
 
 /** Gravada em `Config`. O instalador compara e avisa quando a planilha está velha. */
 export const SCHEMA_VERSION = 7
@@ -1041,14 +1042,39 @@ export const DASHBOARD = {
    * de A:F (as tabelas) e de G/H (controle de privacidade, linha 1 só).
    */
   chartsColumn: 7,
-  /** Linha de âncora da pizza de alocação — alinhada com o bloco de totais. */
-  allocationChartRow: 3,
   /**
-   * Linha de âncora do histórico, abaixo da pizza. O gap replica a folga que
-   * o layout anterior já usava entre o topo do gráfico e o que vinha depois
-   * (~19 linhas) — suficiente pro tamanho padrão de gráfico do Sheets.
+   * Quadro de rendimento × CDI — no TOPO, à direita do bloco de totais e
+   * acima dos dois gráficos: é a primeira leitura de "como a carteira vai",
+   * e os gráficos abaixo detalham.
    */
-  historyChartRow: 22,
+  performanceHeaderRow: 3,
+  /** Linha dos últimos 12 meses; a do histórico total vem logo abaixo. */
+  performanceFirstRow: 4,
+  /**
+   * Linha de âncora da pizza de alocação — abaixo do quadro de rendimento
+   * (3–5), com a 6 de respiro. Fica alinhada com a tabela de alocação.
+   */
+  allocationChartRow: 7,
+  /**
+   * Linha de âncora do histórico, abaixo da pizza. O gráfico tem 371 px no
+   * tamanho padrão do Sheets; da 7 até a 23 (com os cabeçalhos de 32 px das
+   * tabelas no caminho) são 379 px, então a pizza termina na 23 e a 24 fica
+   * de respiro.
+   */
+  historyChartRow: 25,
+  /**
+   * Coluna (0-based) do rótulo do quadro. Uma à direita de `chartsColumn`: a
+   * H é a do checkbox de privacidade, estreita demais (40 px) para rótulo.
+   */
+  performanceColumn: 8,
+  /**
+   * Coluna (0-based) da série que o gráfico de patrimônio desenha — janela de
+   * 12 meses e a linha "mesmo dinheiro no CDI". Fica bem à direita, longe da
+   * vista (T), porque é dado de bastidor do gráfico, não leitura.
+   */
+  evolutionDataColumn: 19,
+  /** Cabeçalho da série (vira a legenda do gráfico); os pontos vêm abaixo. */
+  evolutionDataRow: 1,
 } as const
 
 export const DASHBOARD_ALLOCATION_HEADERS = [
@@ -1194,19 +1220,6 @@ function columnLetterOfSchema(index: number): string {
 }
 
 /**
- * Quantas linhas do histórico os gráficos cobrem. O snapshot agora é semanal
- * (um ponto por semana, via `snapshotWeekly` em `apps-script/Code.gs`) — 300
- * linhas cobrem uns 5 anos e meio de folga, a mesma margem generosa que 60
- * linhas representavam quando o snapshot era mensal.
- *
- * O gráfico lê sempre as `HISTORY_CHART_ROWS` primeiras linhas da aba (ver
- * `chartDefinitions`), e o histórico é ordenado por data crescente — por isso
- * este número precisa ser maior que o total de linhas já gravadas, senão o
- * gráfico para de avançar e mostra só a janela mais antiga.
- */
-export const HISTORY_CHART_ROWS = 300
-
-/**
  * Título do gráfico de patrimônio. Duplicado em `apps-script/Code.gs` (não dá
  * para importar TypeScript lá) — é como o `onEdit` acha o gráfico certo para
  * esconder o eixo Y quando o modo privacidade liga.
@@ -1215,3 +1228,150 @@ export const HISTORY_CHART_TITLE = 'Patrimônio — últimos meses'
 
 /** Título do gráfico de pizza — usado para achá-lo de novo e reposicioná-lo a cada instalação. */
 export const CLASS_ALLOCATION_CHART_TITLE = 'Alocação por classe'
+
+// ---------------------------------------------------------------------------
+// Evolução: patrimônio × CDI
+// ---------------------------------------------------------------------------
+
+/**
+ * Cabeçalho da série do gráfico de patrimônio — as duas últimas viram a
+ * legenda do gráfico, por isso são nome de linha, não de coluna técnica.
+ */
+export const EVOLUTION_DATA_HEADERS = ['Semana', 'Carteira', 'Mesmo dinheiro 100% no CDI']
+
+/**
+ * Teto de pontos da janela de 12 meses. O snapshot é um por semana (53 num
+ * ano) — a folga cobre o histórico antigo que ainda tenha linha mensal
+ * misturada. O gráfico lê exatamente estas linhas.
+ */
+export const EVOLUTION_CHART_ROWS = 60
+
+export const DASHBOARD_PERFORMANCE_HEADERS = ['Rendimento', 'Carteira', 'CDI', 'CAGR (a.a.)']
+
+/**
+ * Pedaços comuns às fórmulas de evolução — o espelho em fórmula de
+ * `src/domain/performance.ts`. Cada fórmula é um `LET` autocontido (o Sheets
+ * não compartilha variável entre células), e as variáveis têm sempre o mesmo
+ * nome para dar para ler uma contra a outra:
+ *
+ *   hd/hv  datas (sem hora) e patrimônio do Histórico, em ordem
+ *   wd/wv  o mesmo, só os últimos 12 meses (`EDATE` — igual a `subtractMonths`)
+ *   td/ta  data e aporte líquido em reais de cada operação (`netContributionBRL`)
+ *   cd/cl  data e LOG ACUMULADO do CDI: o fator de `(a, b]` é EXP(L(b) − L(a)),
+ *          com L(x) = XLOOKUP da última data ≤ x — o mesmo `cdiFactor`, sem
+ *          multiplicar a série inteira de novo para cada ponto
+ *
+ * Toda fórmula daqui vai dentro de `ARRAYFORMULA`: fora dela, `INT(coluna)` e
+ * `IF(coluna="buy";…)` devolvem só o PRIMEIRO elemento, sem erro nenhum —
+ * medido na planilha, a série do gráfico saía com um ponto só.
+ */
+function evolutionPrelude(): string {
+  const col = (spec: DataSheetSpec, key: string) => {
+    const letter = columnLetterOfSchema(spec.columns.findIndex((column) => column.key === key))
+    return ref(spec.title, `$${letter}$2:$${letter}`)
+  }
+  const historyDate = col(HISTORY_SHEET, 'date')
+  const historyBlock = ref(
+    HISTORY_SHEET.title,
+    `$${columnLetterOfSchema(0)}$2:$${columnLetterOfSchema(HISTORY_SHEET.columns.findIndex((c) => c.key === 'totalBRL'))}`,
+  )
+  const tradeId = col(TRADES_SHEET, 'id')
+  const tradeDate = col(TRADES_SHEET, 'date')
+  const tradeKind = col(TRADES_SHEET, 'kind')
+  const tradeBRL = col(TRADES_SHEET, 'netValueBRL')
+  const cdiDate = col(CDI_SHEET, 'date')
+  const cdiRate = col(CDI_SHEET, 'rateDaily')
+  const totalIndex = HISTORY_SHEET.columns.findIndex((c) => c.key === 'totalBRL') + 1
+
+  return (
+    `h;SORT(FILTER(${historyBlock};${historyDate}<>"");1;TRUE);` +
+    `hd;INT(INDEX(h;;1));hv;INDEX(h;;${totalIndex});` +
+    `ws;EDATE(MAX(hd);-${PERFORMANCE_WINDOW_MONTHS});` +
+    `wd;FILTER(hd;hd>=ws);wv;FILTER(hv;hd>=ws);` +
+    // Sem operação, um aporte zero na data zero: não soma nada e não quebra.
+    `td;IFERROR(INT(FILTER(${tradeDate};${tradeId}<>""));0);` +
+    `ta;IFERROR(FILTER(IF(${tradeKind}="buy";${tradeBRL};-${tradeBRL});${tradeId}<>"");0);` +
+    `tmin;IFERROR(MIN(FILTER(${tradeDate};${tradeId}<>""));INDEX(hd;1));` +
+    `inc;INT(MIN(tmin;INDEX(hd;1)));` +
+    `full;INDEX(wd;1)=INDEX(hd;1);` +
+    // Sem CDI, log zero: o fator vira 1 em vez de derrubar a fórmula. `INT`
+    // porque o Apps Script grava a data do CDI com hora (09:00, medido) — sem
+    // ele, o dia do aporte não casa com a própria data e rende um dia a mais.
+    `cd;IFERROR(INT(FILTER(${cdiDate};${cdiDate}<>""));0);` +
+    `cl;IFERROR(SCAN(0;FILTER(${cdiRate};${cdiDate}<>"");LAMBDA(a;r;a+LN(1+r)));0);`
+  )
+}
+
+/** L(x) do prelúdio: log acumulado do CDI até a data `x`, inclusive. */
+function cdiLog(date: string): string {
+  return `XLOOKUP(${date};cd;cl;0;-1)`
+}
+
+/**
+ * A série do gráfico: semana, carteira e "mesmo dinheiro no CDI"
+ * (`performanceWindow` + `cdiBenchmarkSeries`). Uma fórmula só, que derrama
+ * as três colunas para baixo.
+ */
+export function evolutionSeriesFormula(): string {
+  return (
+    `=IFERROR(ARRAYFORMULA(LET(${evolutionPrelude()}` +
+    `dini;INDEX(wd;1);vini;INDEX(wv;1);lini;${cdiLog('dini')};` +
+    `tl;MAP(td;LAMBDA(t;${cdiLog('t')}));` +
+    `eq;MAP(wd;LAMBDA(d;LET(ld;${cdiLog('d')};` +
+    `vini*EXP(ld-lini)+SUMPRODUCT((td>dini)*(td<=d)*ta*EXP(ld-tl)))));` +
+    `HSTACK(wd;wv;eq)));"")`
+  )
+}
+
+/**
+ * Rentabilidade ponderada pelo tempo (`timeWeightedReturn`) sobre as datas
+ * `dates`/valores `values` do prelúdio. `inception` é uma expressão booleana:
+ * verdadeira, a primeira fatia vai do primeiro aporte ao primeiro snapshot.
+ *
+ * `INDEX(…;MAX(1;i-1))` em vez de `i-1`: `INDEX(x;0)` devolve a coluna
+ * inteira, e o `IF` do Sheets não garante que o ramo descartado não seja
+ * avaliado.
+ */
+function twrExpression(dates: string, values: string, inception: string): string {
+  return (
+    `LET(f;MAP(SEQUENCE(ROWS(${dates}));LAMBDA(i;LET(` +
+    `dant;IF(i=1;-1;INDEX(${dates};MAX(1;i-1)));` +
+    `vant;IF(i=1;0;INDEX(${values};MAX(1;i-1)));` +
+    `base;vant+SUMPRODUCT((td>dant)*(td<=INDEX(${dates};i))*ta);` +
+    `IF(OR(base<=0;AND(i=1;NOT(${inception})));"";INDEX(${values};i)/base))));` +
+    `IF(COUNT(f)=0;"";PRODUCT(f)-1))`
+  )
+}
+
+/**
+ * As duas linhas do quadro de rendimento (`performanceOverview`): rótulo,
+ * carteira, CDI e — só no histórico total — CAGR.
+ *
+ * Com menos de 12 meses de histórico, a primeira linha é o histórico inteiro e
+ * dá exatamente o mesmo número da segunda.
+ */
+export function performanceRowFormulas(): string[][] {
+  const wrap = (body: string) => `=IFERROR(ARRAYFORMULA(LET(${evolutionPrelude()}${body}));"")`
+  const monthYear = (date: string) => `TEXT(MONTH(${date});"00")&"/"&YEAR(${date})`
+  const end = 'MAX(hd)'
+  const totalTwr = twrExpression('hd', 'hv', 'TRUE')
+
+  return [
+    [
+      wrap(`IF(full;"Desde "&${monthYear('inc')}&" (menos de 12 meses)";"Últimos 12 meses")`),
+      wrap(`IF(full;${totalTwr};${twrExpression('wd', 'wv', 'FALSE')})`),
+      wrap(`EXP(${cdiLog(end)}-${cdiLog('IF(full;inc;INDEX(wd;1))')})-1`),
+      '',
+    ],
+    [
+      wrap(`"Histórico total (desde "&${monthYear('inc')}&")"`),
+      wrap(totalTwr),
+      wrap(`EXP(${cdiLog(end)}-${cdiLog('inc')})-1`),
+      // Menos de um ano não se anualiza (`MIN_DAYS_FOR_CAGR`).
+      wrap(
+        `LET(r;${totalTwr};dias;${end}-inc;` +
+          `IF(dias<${MIN_DAYS_FOR_CAGR};"menos de 1 ano";IF(OR(r="";r<=-1);"";(1+r)^(365/dias)-1)))`,
+      ),
+    ],
+  ]
+}

@@ -7,7 +7,7 @@ só mapeia.
 
 Um arquivo só: `server.ts`. Registra as tools `portfolio_summary`,
 `portfolio_positions`, `portfolio_asset`, `portfolio_trades`,
-`portfolio_performance`.
+`portfolio_performance`, `portfolio_evolution`.
 
 ## Pedidos comuns
 

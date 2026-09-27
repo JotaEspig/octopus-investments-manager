@@ -184,6 +184,7 @@ o arquivo guarda o caminho dela.
 | `portfolio_asset` | Detalhe de um ativo + histórico + resgate com IR |
 | `portfolio_trades` | Extrato filtrado |
 | `portfolio_performance` | Aportado, valor atual, retorno simples e XIRR |
+| `portfolio_evolution` | Rentabilidade (TWR) contra o CDI em 12 meses e no histórico total, CAGR e série semanal "mesmo dinheiro no CDI" |
 
 Todas são **somente leitura**, de propósito. O agente analisa, você registra — uma
 análise errada você percebe lendo, um lançamento errado contamina preço médio e
@@ -205,8 +206,11 @@ trabalha é o Apps Script, num gatilho diário na nuvem do Google.
 | **Cotações** | sim | **não** — o script força o recálculo antes de ler |
 | **Histórico** | sim | **sim — mas é reconstruível** |
 
-O gráfico de patrimônio é **mensal**, não diário: um ponto por mês, atualizado a
-cada execução enquanto o mês está aberto.
+O gráfico de patrimônio é **semanal**, não diário: um ponto por semana, atualizado a
+cada execução enquanto a semana está aberta. Mostra os últimos 12 meses, com uma
+linha cinza de quanto valeria o mesmo dinheiro aplicado 100% no CDI. O quadro no
+topo do Painel traz a rentabilidade da carteira contra o CDI em 12 meses e no
+histórico total, com o CAGR a partir de um ano de histórico.
 
 ### Três camadas protegem o histórico
 

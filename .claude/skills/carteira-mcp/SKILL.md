@@ -3,9 +3,10 @@ name: carteira-mcp
 description: >-
   Como consultar a carteira real do usuário pelas tools MCP do servidor `carteira`
   (portfolio_summary, portfolio_positions, portfolio_asset, portfolio_trades,
-  portfolio_performance) e como interpretar os números que elas devolvem — preço médio pela
-  regra da RFB, a diferença entre retorno na moeda nativa e em reais, XIRR versus retorno
-  simples, e marcação na curva de renda fixa. Use SEMPRE que a conversa envolver a carteira
+  portfolio_performance, portfolio_evolution) e como interpretar os números que elas devolvem —
+  preço médio pela regra da RFB, a diferença entre retorno na moeda nativa e em reais, XIRR
+  versus retorno simples versus rentabilidade ponderada pelo tempo, comparação com o CDI, e
+  marcação na curva de renda fixa. Use SEMPRE que a conversa envolver a carteira
   concreta do usuário (posições, alocação, rentabilidade, rebalanceamento, o que aportar)
   em vez de um caso hipotético.
 ---
@@ -26,6 +27,7 @@ de cada coisa, é retrabalho quando o número está a uma chamada de distância.
 | `portfolio_asset` | Uma tese específica: histórico completo de operações do papel, e para RF a simulação de resgate com IR. |
 | `portfolio_trades` | Ritmo de aportes, auditoria de como uma posição se formou. |
 | `portfolio_performance` | "Quanto rendeu?" — traz retorno simples e XIRR. |
+| `portfolio_evolution` | "Estou batendo o CDI?" — rentabilidade da carteira e CDI no mesmo período (12 meses e histórico total), CAGR e a série semanal contra o CDI. |
 
 Todas são **somente leitura**. Não existe tool de escrita, e isso é
 intencional: o usuário registra as operações na interface. Se ele pedir para
@@ -68,6 +70,34 @@ retorno simples estava enganando.
 Se `annualizedReturn` vier `null`, o fluxo não tem solução matemática. **Não
 invente um número**: diga que não é determinável e use o retorno simples,
 declarando a limitação.
+
+### Contra o CDI: `portfolio_evolution`
+São os mesmos números do Painel da planilha (gráfico de patrimônio e quadro de
+rendimento). Três coisas para não errar:
+
+- **`portfolioReturn` é rentabilidade ponderada pelo tempo (TWR), não XIRR.**
+  TWR mede quanto cada real rendeu, sem deixar o tamanho e o momento dos aportes
+  distorcerem — é a conta que fundos e o próprio CDI divulgam, por isso
+  `portfolioReturn` e `cdiReturn` se comparam direto. A XIRR de
+  `portfolio_performance` pondera pelo dinheiro: aporte grande logo antes de uma
+  alta infla a XIRR sem que a carteira tenha sido melhor gerida. Se as duas
+  divergem muito, a explicação é o timing dos aportes — vale dizer isso.
+- **`cdiBRL` na `series` é o mesmo dinheiro aplicado 100% no CDI**: começa igual
+  ao patrimônio do primeiro ponto e recebe cada aporte (e perde cada venda e
+  provento) na data em que aconteceu. `portfolioBRL − cdiBRL` no último ponto é
+  quanto a carteira ganhou (ou deixou de ganhar), em reais, contra a
+  alternativa sem risco.
+- **`cagr` vem `null` com menos de um ano de histórico — de propósito.** Não
+  anualize por conta própria: três meses bons anualizados viram uma taxa que a
+  carteira nunca entregou. Com `isFullHistory: true`, o histórico ainda não tem
+  12 meses e `lastMonths` é o mesmo período de `total`.
+
+Com poucos meses de histórico, qualquer comparação com o CDI é ruído — renda
+variável perde do CDI em muitos trimestres e ganha no longo prazo. Diga isso em
+vez de tirar conclusão sobre a estratégia a partir de semanas.
+
+Limitação declarada: o aporte conta como se entrasse no começo da semana em que
+caiu; nos meses antigos com snapshot mensal, a aproximação é mais grosseira.
 
 ### Renda fixa é marcada na curva
 Não há cotação: o valor vem do principal corrigido pelo indexador desde a

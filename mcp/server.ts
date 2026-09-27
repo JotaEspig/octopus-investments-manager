@@ -28,8 +28,16 @@ import { z } from 'zod'
 import { ASSET_CLASSES } from '../src/domain/types'
 import { summarizePerformance } from '../src/domain/returns'
 import { netOfTax } from '../src/domain/fixed-income'
+import {
+  cdiBenchmarkSeries,
+  MIN_DAYS_FOR_CAGR,
+  performanceOverview,
+  performanceWindow,
+} from '../src/domain/performance'
 import { today } from '../src/lib/dates'
+import { getSheetsContext } from '../src/sheets/client'
 import { loadPortfolio } from '../src/sheets/portfolio'
+import { readPerformanceSeries } from '../src/sheets/repositories'
 
 const server = new McpServer({ name: 'carteira', version: '0.1.0' })
 
@@ -210,6 +218,59 @@ server.registerTool(
       const { data, summary } = await loadPortfolio()
       const performance = summarizePerformance(data.trades, summary.totalBRL, today())
       return json({ performance, allocation: summary.byClass })
+    } catch (error) {
+      return failure(error)
+    }
+  },
+)
+
+server.registerTool(
+  'portfolio_evolution',
+  {
+    title: 'Evolução da carteira contra o CDI',
+    description:
+      'Os mesmos números do gráfico e do quadro de rendimento do Painel. `lastMonths` e ' +
+      '`total` trazem a rentabilidade PONDERADA PELO TEMPO (TWR) da carteira e o CDI ' +
+      'acumulado no mesmo período — é a conta que fundos e o CDI divulgam, então os dois ' +
+      'percentuais se comparam lado a lado. Não é a XIRR de `portfolio_performance`: TWR ' +
+      'mede a gestão (quanto cada real rendeu), XIRR pondera pelo dinheiro (o momento dos ' +
+      'aportes pesa). Quando divergem, é o timing dos aportes. `lastMonths` são os 12 meses ' +
+      'até o último snapshot semanal; com `isFullHistory: true` o histórico ainda não tem ' +
+      '12 meses e o período é o histórico inteiro (mesmo número de `total`). `total.cagr` ' +
+      `é o retorno total anualizado — null com menos de ${MIN_DAYS_FOR_CAGR} dias, de ` +
+      'propósito: anualizar poucos meses projeta uma taxa que a carteira nunca entregou; não ' +
+      'anualize por conta própria. `portfolioReturn` também pode vir null (sem snapshot com ' +
+      'base positiva). `series` é a janela semana a semana: `portfolioBRL` é o patrimônio ' +
+      'registrado e `cdiBRL` quanto valeria o MESMO dinheiro (patrimônio do primeiro ponto ' +
+      'mais cada aporte na data dele, menos vendas e proventos) aplicado 100% no CDI — ' +
+      'diferença em reais do que a carteira ganhou ou perdeu contra o CDI. Tudo em reais. ' +
+      'Aproximação declarada: o aporte conta como se entrasse no começo da semana em que ' +
+      'caiu; em meses antigos com snapshot mensal o erro é maior.',
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const context = getSheetsContext()
+      const [{ data }, { history, cdi }] = await Promise.all([
+        loadPortfolio(context),
+        readPerformanceSeries(context),
+      ])
+      const overview = performanceOverview(history, data.trades, cdi)
+      if (!overview) {
+        return json({
+          overview: null,
+          series: [],
+          note: 'Histórico vazio: o Apps Script ainda não gravou nenhum snapshot semanal.',
+        })
+      }
+      const window = performanceWindow(history)
+      const benchmark = cdiBenchmarkSeries(window, data.trades, cdi)
+      const series = window.map((point, index) => ({
+        date: point.date,
+        portfolioBRL: point.totalBRL,
+        cdiBRL: Math.round((benchmark[index] ?? 0) * 100) / 100,
+      }))
+      return json({ ...overview, series })
     } catch (error) {
       return failure(error)
     }

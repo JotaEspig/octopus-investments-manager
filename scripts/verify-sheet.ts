@@ -17,6 +17,8 @@
  *   5. Valor e rendimento % por objetivo, no Painel
  *   6. Rendimento % por classe — o da linha 1 de cada aba e o do Painel, que
  *      lê aquela mesma célula pelo intervalo nomeado
+ *   7. Evolução contra o CDI: a série do gráfico (janela de 12 meses e linha
+ *      "mesmo dinheiro no CDI") e o quadro de rendimento no topo
  *
  * Sai com código 1 em qualquer divergência, para poder virar um passo de CI.
  */
@@ -24,7 +26,19 @@
 import { config as loadDotenv } from 'dotenv'
 import { getSheetsContext } from '../src/sheets/client'
 import { loadPortfolio } from '../src/sheets/portfolio'
-import { DASHBOARD, VIEW_FIRST_ROW, VIEW_ROWS, VIEW_SHEETS, ref } from '../src/sheets/schema'
+import { readPerformanceSeries } from '../src/sheets/repositories'
+import {
+  DASHBOARD,
+  DASHBOARD_PERFORMANCE_HEADERS,
+  EVOLUTION_CHART_ROWS,
+  EVOLUTION_DATA_HEADERS,
+  VIEW_FIRST_ROW,
+  VIEW_ROWS,
+  VIEW_SHEETS,
+  ref,
+} from '../src/sheets/schema'
+import { cdiBenchmarkSeries, performanceOverview, performanceWindow } from '../src/domain/performance'
+import { fromSheetDate } from '../src/lib/dates'
 import { columnLetter } from '../src/sheets/bootstrap'
 import { parseNumber } from '../src/lib/money'
 import { ASSET_CLASS_LABELS, OBJECTIVE_LABELS, OBJECTIVES, type Position } from '../src/domain/types'
@@ -95,7 +109,7 @@ function aggregateReturn(positions: readonly Position[]): number {
 
 async function main() {
   const context = getSheetsContext()
-  const { positions, summary } = await loadPortfolio()
+  const { positions, summary, data } = await loadPortfolio()
 
   // A ordem importa: as respostas voltam na ordem dos pedidos, e é dela que
   // saem os índices usados na leitura (`rowsAt`, `classReturnAt`, `afterViews`).
@@ -118,6 +132,18 @@ async function main() {
     ),
     dashboardColumn(DASHBOARD.returnColumn, DASHBOARD.allocationFirstRow, VIEW_SHEETS.length),
     dashboardColumn(DASHBOARD.returnColumn, DASHBOARD.objectivesFirstRow, OBJECTIVES.length),
+    ref(
+      DASHBOARD.title,
+      `${columnLetter(DASHBOARD.evolutionDataColumn)}${DASHBOARD.evolutionDataRow + 1}:` +
+        `${columnLetter(DASHBOARD.evolutionDataColumn + EVOLUTION_DATA_HEADERS.length - 1)}` +
+        `${DASHBOARD.evolutionDataRow + EVOLUTION_CHART_ROWS}`,
+    ),
+    ref(
+      DASHBOARD.title,
+      `${columnLetter(DASHBOARD.performanceColumn)}${DASHBOARD.performanceFirstRow}:` +
+        `${columnLetter(DASHBOARD.performanceColumn + DASHBOARD_PERFORMANCE_HEADERS.length - 1)}` +
+        `${DASHBOARD.performanceFirstRow + 1}`,
+    ),
   ]
 
   const response = await context.api.spreadsheets.values.batchGet({
@@ -255,6 +281,47 @@ async function main() {
       expected,
     )
   })
+
+  // 7. Evolução contra o CDI — a série do gráfico e o quadro de rendimento.
+  const { history, cdi } = await readPerformanceSeries(context)
+  const window = performanceWindow(history)
+  const benchmark = cdiBenchmarkSeries(window, data.trades, cdi)
+  const series = rowsAt(afterViews + 4).filter((row) => row[0] !== '' && row[0] !== undefined)
+  if (series.length !== window.length) {
+    divergences.push({
+      where: `${DASHBOARD.title} · gráfico de patrimônio`,
+      what: `pontos na janela de 12 meses (teto: ${EVOLUTION_CHART_ROWS})`,
+      sheet: series.length,
+      code: window.length,
+    })
+  }
+  window.forEach((point, index) => {
+    const row = series[index] ?? []
+    const where = `${DASHBOARD.title} · gráfico ${point.date}`
+    if (fromSheetDate(row[0]) !== point.date) {
+      divergences.push({ where, what: `data (${String(row[0])})`, sheet: NaN, code: NaN })
+    }
+    compare(where, 'carteira', parseNumber(row[1]), point.totalBRL)
+    compare(where, 'mesmo dinheiro no CDI', parseNumber(row[2]), benchmark[index] ?? 0)
+  })
+
+  const overview = performanceOverview(history, data.trades, cdi)
+  if (overview) {
+    const [lastMonths = [], total = []] = rowsAt(afterViews + 5)
+    const where = `${DASHBOARD.title} · quadro de rendimento`
+    const optional = (value: unknown, expected: number | null, what: string) => {
+      if (expected === null) {
+        if (typeof value === 'number') divergences.push({ where, what, sheet: value, code: NaN })
+        return
+      }
+      comparePercent(where, what, parseNumber(value), expected)
+    }
+    optional(lastMonths[1], overview.lastMonths.portfolioReturn, 'carteira — 12 meses')
+    comparePercent(where, 'CDI — 12 meses', parseNumber(lastMonths[2]), overview.lastMonths.cdiReturn)
+    optional(total[1], overview.total.portfolioReturn, 'carteira — histórico total')
+    comparePercent(where, 'CDI — histórico total', parseNumber(total[2]), overview.total.cdiReturn)
+    optional(total[3], overview.total.cagr, 'CAGR')
+  }
 
   report(positions.length)
 }

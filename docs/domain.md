@@ -47,3 +47,33 @@ ativo.
 Moeda é propriedade do ATIVO, nunca da classe. ETF é o exemplo: a mesma classe
 tem ativo americano (USD) e ativo listado na B3 (BRL) lado a lado — nada no
 domínio presume que uma classe inteira está numa moeda só.
+
+## Evolução contra o CDI (`performance.ts`)
+
+O gráfico de patrimônio do Painel e o quadro de rendimento no topo respondem duas
+perguntas diferentes, com duas contas diferentes:
+
+**"E se o mesmo dinheiro tivesse ido todo pro CDI?"** — a linha cinza. Parte do
+patrimônio do primeiro ponto da janela e soma cada aporte (subtrai cada
+resgate e provento) na data em que ele aconteceu, cada um rendendo CDI dali em
+diante. Comparável em reais com a linha da carteira.
+
+**"Quanto a carteira rendeu?"** — o quadro. Com aporte mensal, `final ÷ inicial`
+mede quanto você depositou, não quanto rendeu. Por isso é rentabilidade
+ponderada pelo tempo (TWR): cada fatia entre dois snapshots rende
+`atual ÷ (anterior + aporte da fatia)`, e as fatias se multiplicam. É a conta
+que fundos e o próprio CDI divulgam — o que torna os dois percentuais
+comparáveis lado a lado. Não é a XIRR de `returns.ts`, que pondera pelo
+dinheiro e responde outra pergunta.
+
+- Provento **subtrai** do aporte: sai do patrimônio que o histórico mede.
+- A janela é de 12 meses contados do **último snapshot**, não de hoje. Com
+  menos de 12 meses, a primeira linha do quadro é o histórico inteiro e dá o
+  mesmo número da segunda.
+- O histórico total começa no **primeiro aporte**: a primeira fatia vai dele ao
+  primeiro snapshot, com patrimônio anterior zero.
+- **CAGR só com um ano ou mais** (`MIN_DAYS_FOR_CAGR`): anualizar três meses
+  bons projeta um número que a carteira nunca entregou.
+- Aproximação declarada: o aporte é tratado como se entrasse no começo da
+  fatia. Com snapshot semanal, erra por poucos dias; nos meses antigos de
+  snapshot mensal, por mais.

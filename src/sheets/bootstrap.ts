@@ -12,7 +12,9 @@ import {
   DATA_SHEETS,
   DIALECT_PROBE,
   DIALECT_PROBE_EXPECTED,
-  HISTORY_CHART_ROWS,
+  DASHBOARD_PERFORMANCE_HEADERS,
+  EVOLUTION_CHART_ROWS,
+  EVOLUTION_DATA_HEADERS,
   HISTORY_CHART_TITLE,
   NAMED_RANGE,
   SCHEMA_VERSION,
@@ -23,9 +25,11 @@ import {
   VIEW_ROWS,
   VIEW_SHEETS,
   dashboardAssetsFormula,
+  evolutionSeriesFormula,
   localizeValue,
   objectiveReturnFormula,
   objectiveTotalFormula,
+  performanceRowFormulas,
   ref,
   type DataSheetSpec,
   type FormulaDialect,
@@ -150,6 +154,12 @@ function viewSheetContent(spec: ViewSheetSpec): ValueRange[] {
 
 function dashboardContent(): ValueRange[] {
   const lastTableColumn = columnLetter(DASHBOARD_TABLE_COLUMNS - 1)
+  const performanceColumn = columnLetter(DASHBOARD.performanceColumn)
+  const performanceLastColumn = columnLetter(
+    DASHBOARD.performanceColumn + DASHBOARD_PERFORMANCE_HEADERS.length - 1,
+  )
+  const evolutionColumn = columnLetter(DASHBOARD.evolutionDataColumn)
+  const evolutionLastColumn = columnLetter(DASHBOARD.evolutionDataColumn + EVOLUTION_DATA_HEADERS.length - 1)
   const firstRow = DASHBOARD.allocationFirstRow
   const lastRow = firstRow + ASSET_CLASSES.length - 1
 
@@ -243,12 +253,43 @@ function dashboardContent(): ValueRange[] {
       range: ref(DASHBOARD.title, `A${DASHBOARD.assetsFirstRow}`),
       values: [[dashboardAssetsFormula()]],
     },
+    // Quadro de rendimento, no topo — acima dos dois gráficos.
+    {
+      range: ref(
+        DASHBOARD.title,
+        `${performanceColumn}${DASHBOARD.performanceHeaderRow}:${performanceLastColumn}${DASHBOARD.performanceHeaderRow}`,
+      ),
+      values: [DASHBOARD_PERFORMANCE_HEADERS],
+    },
+    {
+      range: ref(
+        DASHBOARD.title,
+        `${performanceColumn}${DASHBOARD.performanceFirstRow}:${performanceLastColumn}${DASHBOARD.performanceFirstRow + 1}`,
+      ),
+      values: performanceRowFormulas(),
+    },
+    // A série que o gráfico desenha: cabeçalho (a legenda) e uma fórmula que
+    // derrama as três colunas para baixo.
+    {
+      range: ref(
+        DASHBOARD.title,
+        `${evolutionColumn}${DASHBOARD.evolutionDataRow}:${evolutionLastColumn}${DASHBOARD.evolutionDataRow}`,
+      ),
+      values: [EVOLUTION_DATA_HEADERS],
+    },
+    {
+      range: ref(DASHBOARD.title, `${evolutionColumn}${DASHBOARD.evolutionDataRow + 1}`),
+      values: [[evolutionSeriesFormula()]],
+    },
   ]
 }
 
 // ---------------------------------------------------------------------------
 // Gráficos
 // ---------------------------------------------------------------------------
+
+/** Linha "mesmo dinheiro no CDI" — cinza claro (#BDBDBD). */
+const CDI_LINE_COLOR = { red: 0.74, green: 0.74, blue: 0.74 }
 
 export interface ChartDefinition {
   title: string
@@ -263,7 +304,7 @@ export interface ChartDefinition {
  * criar (`addChart`) ou só mover um gráfico já existente
  * (`updateEmbeddedObjectPosition`).
  */
-function chartDefinitions(dashboardId: number, historyId: number): ChartDefinition[] {
+function chartDefinitions(dashboardId: number): ChartDefinition[] {
   const firstRow = DASHBOARD.allocationFirstRow
   const lastRow = firstRow + ASSET_CLASSES.length
 
@@ -274,6 +315,16 @@ function chartDefinitions(dashboardId: number, historyId: number): ChartDefiniti
     startColumnIndex: c1,
     endColumnIndex: c2,
   })
+
+  // Uma coluna da série de evolução, do cabeçalho (legenda) ao último ponto.
+  const evolution = (offset: number) =>
+    gridRange(
+      dashboardId,
+      DASHBOARD.evolutionDataRow - 1,
+      DASHBOARD.evolutionDataRow + EVOLUTION_CHART_ROWS,
+      DASHBOARD.evolutionDataColumn + offset,
+      DASHBOARD.evolutionDataColumn + offset + 1,
+    )
 
   return [
     {
@@ -305,19 +356,18 @@ function chartDefinitions(dashboardId: number, historyId: number): ChartDefiniti
             { position: 'BOTTOM_AXIS', title: 'Semana' },
             { position: 'LEFT_AXIS', title: 'R$' },
           ],
-          domains: [
-            {
-              domain: {
-                sourceRange: { sources: [gridRange(historyId, 0, HISTORY_CHART_ROWS, 0, 1)] },
-              },
-            },
-          ],
+          // Lê a série da janela de 12 meses que o próprio Painel monta
+          // (`evolutionSeriesFormula`), não o Histórico cru: é ali que a
+          // janela é cortada e a linha do CDI é calculada.
+          domains: [{ domain: { sourceRange: { sources: [evolution(0)] } } }],
           series: [
+            { series: { sourceRange: { sources: [evolution(1)] } }, targetAxis: 'LEFT_AXIS' },
             {
-              series: {
-                sourceRange: { sources: [gridRange(historyId, 0, HISTORY_CHART_ROWS, 1, 2)] },
-              },
+              // Secundária de propósito: cinza claro, para a carteira continuar
+              // sendo a linha que o olho segue e o CDI ser só a régua.
+              series: { sourceRange: { sources: [evolution(2)] } },
               targetAxis: 'LEFT_AXIS',
+              colorStyle: { rgbColor: CDI_LINE_COLOR },
             },
           ],
         },
@@ -654,9 +704,8 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
   // mudar a posição aqui não quebra a lógica de lá.
   const dashboardCharts = sheetsByTitle.get(DASHBOARD.title)?.charts ?? []
   const dashboardId = sheetId(DASHBOARD.title)
-  const historyId = sheetId(SHEET.history)
-  if (dashboardId !== null && historyId !== null) {
-    for (const definition of chartDefinitions(dashboardId, historyId)) {
+  if (dashboardId !== null) {
+    for (const definition of chartDefinitions(dashboardId)) {
       const anchorCell = {
         sheetId: dashboardId,
         rowIndex: definition.anchorRow - 1,
