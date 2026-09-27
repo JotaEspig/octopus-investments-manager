@@ -1038,7 +1038,7 @@ export const DASHBOARD = {
   assetsFirstRow: 25,
   /**
    * Coluna (0-based) onde os dois gráficos ficam, empilhados à DIREITA das
-   * tabelas — pizza de alocação em cima, linha de patrimônio embaixo. Longe
+   * tabelas — linha de patrimônio em cima, pizza de alocação embaixo. Longe
    * de A:F (as tabelas) e de G/H (controle de privacidade, linha 1 só).
    */
   chartsColumn: 7,
@@ -1051,17 +1051,18 @@ export const DASHBOARD = {
   /** Linha dos últimos 12 meses; a do histórico total vem logo abaixo. */
   performanceFirstRow: 4,
   /**
-   * Linha de âncora da pizza de alocação — abaixo do quadro de rendimento
-   * (3–5), com a 6 de respiro. Fica alinhada com a tabela de alocação.
+   * Linha de âncora do gráfico de patrimônio × CDI — logo abaixo do quadro de
+   * rendimento (3–5), com a 6 de respiro: os dois contam a mesma história
+   * (como a carteira vai contra o CDI), então ficam juntos.
    */
-  allocationChartRow: 7,
+  historyChartRow: 7,
   /**
-   * Linha de âncora do histórico, abaixo da pizza. O gráfico tem 371 px no
-   * tamanho padrão do Sheets; da 7 até a 23 (com os cabeçalhos de 32 px das
-   * tabelas no caminho) são 379 px, então a pizza termina na 23 e a 24 fica
-   * de respiro.
+   * Linha de âncora da pizza de alocação, abaixo do patrimônio. O gráfico tem
+   * 371 px no tamanho padrão do Sheets; da 7 até a 23 (com os cabeçalhos de
+   * 32 px das tabelas no caminho) são 379 px, então o de cima termina na 23 e
+   * a 24 fica de respiro.
    */
-  historyChartRow: 25,
+  allocationChartRow: 25,
   /**
    * Coluna (0-based) do rótulo do quadro. Uma à direita de `chartsColumn`: a
    * H é a do checkbox de privacidade, estreita demais (40 px) para rótulo.
