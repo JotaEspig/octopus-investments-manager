@@ -41,6 +41,13 @@ condição e o fuso nunca era aplicado numa planilha que já nascia `pt_BR`.
 **`values.append` não serve** em `Operações`: as colunas ARRAYFORMULA se
 estendem até o fim da grade e o append escreveria lá embaixo. Use `nextRow`.
 
+**A grade não cresce sozinha.** Cada aba nasce com 1000 linhas, e tanto o
+`values.update` quanto o `getRange` do Apps Script recusam escrever além dela.
+Quem acrescenta linha amplia antes, em lote de 500: `ensureRowCapacity` no
+`writeRow`, `ensureRows` no `Code.gs`. É seguro porque toda fórmula que lê aba
+de dados usa intervalo aberto (`$A$2:$A`, `$D:$D`) — nunca feche um intervalo
+em `$A$1000`, ou as linhas novas ficam de fora da conta em silêncio.
+
 ## O rendimento % da planilha é na MOEDA DO ATIVO
 
 A planilha mostra rendimento em porcentagem em quatro lugares: na linha de cada

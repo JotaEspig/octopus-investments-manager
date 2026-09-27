@@ -246,6 +246,25 @@ function sheetByName(name) {
   return sheet
 }
 
+/**
+ * Linhas acrescentadas de uma vez quando a grade enche. Igual a
+ * GRID_GROWTH_ROWS em src/sheets/repositories.ts.
+ */
+const GRID_GROWTH_ROWS = 500
+
+/**
+ * Garante que a grade da aba chega à linha `lastRow` antes de escrever.
+ *
+ * A aba nasce com 1000 linhas e `getRange` além delas lança erro em vez de
+ * ampliar. O CDI ganha ~252 linhas por ano: sem isto, o `dailyUpdate`
+ * quebraria de vez uns quatro anos depois da instalação — e com ele a
+ * marcação da renda fixa e o snapshot do histórico.
+ */
+function ensureRows(sheet, lastRow) {
+  const maxRows = sheet.getMaxRows()
+  if (lastRow > maxRows) sheet.insertRowsAfter(maxRows, lastRow - maxRows + GRID_GROWTH_ROWS)
+}
+
 /** Datas trafegam como `yyyy-mm-dd` para poder comparar com `<` e `>`. */
 function toIso(value) {
   if (value instanceof Date) return Utilities.formatDate(value, 'UTC', 'yyyy-MM-dd')
@@ -359,6 +378,7 @@ function repairQuotes() {
 
   if (rows.length === 0) return 0
 
+  ensureRows(quotes, rows.length + 1)
   quotes.getRange(2, 1, rows.length, 3).setValues(rows)
   SpreadsheetApp.flush()
   return rows.length
@@ -474,6 +494,7 @@ function fetchCdi() {
   }
 
   if (rows.length > 0) {
+    ensureRows(sheet, sheet.getLastRow() + rows.length)
     sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 2).setValues(rows)
   }
   return rows.length
@@ -645,6 +666,7 @@ function snapshotWeekly() {
     }
   }
 
+  ensureRows(sheet, sheet.getLastRow() + 1)
   sheet.getRange(sheet.getLastRow() + 1, 1, 1, row.length).setValues([row])
   return 'anexado'
 }
@@ -716,6 +738,7 @@ function backfillHistory() {
   }
 
   const sheet = sheetByName(SHEETS.history)
+  ensureRows(sheet, sheet.getLastRow() + rows.length)
   sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows)
   sortHistory()
 
@@ -925,6 +948,7 @@ function recordLastRun() {
 
   // Chave ausente: planilha anterior à v3 do schema. Acrescenta em vez de
   // falhar — o instalador colocaria no lugar certo depois.
+  ensureRows(sheet, sheet.getLastRow() + 1)
   sheet.getRange(sheet.getLastRow() + 1, 1, 1, 3).setValues([
     [LAST_RUN_KEY, stamp, 'Última execução do Apps Script (UTC ISO).'],
   ])

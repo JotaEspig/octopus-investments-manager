@@ -64,6 +64,9 @@ duplicam `VIEW_SHEET.etf`/`VIEW_FIRST_ROW`/o layout de `marketColumns` em
   `Code.gs` novo for colado no editor — o instalador não alcança o script.
 - `SpreadsheetApp.flush()` antes de ler valor de fórmula, senão o snapshot lê o
   estado anterior.
+- Toda escrita de linha nova passa por `ensureRows` antes: `getRange` além da
+  grade lança erro, e a aba CDI (~252 linhas por ano) encheria as 1000 linhas
+  padrão em uns quatro anos, derrubando o `dailyUpdate` inteiro.
 
 ## Por que é colado à mão
 

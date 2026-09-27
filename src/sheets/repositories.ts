@@ -280,6 +280,48 @@ async function nextRow(context: SheetsContext, spec: DataSheetSpec): Promise<num
 }
 
 /**
+ * Linhas acrescentadas de uma vez quando a grade enche. Em lote, e não uma a
+ * uma, para a checagem só custar uma escrita a cada centenas de operações.
+ */
+export const GRID_GROWTH_ROWS = 500
+
+/**
+ * Quantas linhas faltam na grade para escrever na linha `row` (1-based), já
+ * com a folga de `GRID_GROWTH_ROWS`. Zero quando cabe.
+ */
+export function rowsToAppend(gridRows: number, row: number): number {
+  return row <= gridRows ? 0 : row - gridRows + GRID_GROWTH_ROWS
+}
+
+/**
+ * Garante que a grade da aba tem a linha `row`.
+ *
+ * A aba nasce com 1000 linhas, e o `values.update` RECUSA escrever além da
+ * grade ("exceeds grid limits") — o `values.append` ampliaria sozinho, mas não
+ * serve aqui (ver `nextRow`). Sem isto, a operação de número 1000 falharia.
+ * As fórmulas que leem as abas de dados usam intervalo aberto (`$A$2:$A`,
+ * `$D:$D`), então as linhas novas entram nas contas sem mexer em nada.
+ */
+async function ensureRowCapacity(context: SheetsContext, spec: DataSheetSpec, row: number) {
+  const response = await context.api.spreadsheets.get({
+    spreadsheetId: context.spreadsheetId,
+    fields: 'sheets(properties(sheetId,title,gridProperties(rowCount)))',
+  })
+  const properties = response.data.sheets?.find((sheet) => sheet.properties?.title === spec.title)?.properties
+  if (properties?.sheetId == null) return
+
+  const missing = rowsToAppend(properties.gridProperties?.rowCount ?? 0, row)
+  if (missing === 0) return
+
+  await context.api.spreadsheets.batchUpdate({
+    spreadsheetId: context.spreadsheetId,
+    requestBody: {
+      requests: [{ appendDimension: { sheetId: properties.sheetId, dimension: 'ROWS', length: missing } }],
+    },
+  })
+}
+
+/**
  * Fórmula que o CÓDIGO quer que seja fórmula.
  *
  * Existe para separar as duas intenções que passam pelo mesmo cano: a fórmula
@@ -330,6 +372,7 @@ async function writeRow(context: SheetsContext, spec: DataSheetSpec, values: unk
   )
 
   try {
+    await ensureRowCapacity(context, spec, row)
     await context.api.spreadsheets.values.update({
       spreadsheetId: context.spreadsheetId,
       range: writableRange(spec, row),

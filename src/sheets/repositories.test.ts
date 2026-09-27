@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createTradeSchema } from '@/lib/schemas'
-import { escapeSheetsFormula, formula, quoteFormula } from './repositories'
+import { GRID_GROWTH_ROWS, escapeSheetsFormula, formula, quoteFormula, rowsToAppend } from './repositories'
 
 /**
  * Injeção de fórmula na ESCRITA é mais grave que no CSV.
@@ -102,5 +102,17 @@ describe('validação do ticker', () => {
     const comFormula = { ...body('PETR4') }
     comFormula.trade.note = '=1+1 conferir com a corretora'
     expect(createTradeSchema.safeParse(comFormula).success).toBe(true)
+  })
+})
+
+describe('rowsToAppend', () => {
+  it('não amplia enquanto a linha cabe na grade', () => {
+    expect(rowsToAppend(1000, 2)).toBe(0)
+    expect(rowsToAppend(1000, 1000)).toBe(0)
+  })
+
+  it('amplia em lote quando a linha passa da grade', () => {
+    expect(rowsToAppend(1000, 1001)).toBe(1 + GRID_GROWTH_ROWS)
+    expect(rowsToAppend(999, 1001)).toBe(2 + GRID_GROWTH_ROWS)
   })
 })
