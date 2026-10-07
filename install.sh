@@ -29,6 +29,7 @@ MCP_NAME=carteira
 
 TSX="${REPO_DIR}/node_modules/.bin/tsx"
 MCP_ENTRY="${REPO_DIR}/mcp/server.ts"
+MCP_TSCONFIG="${REPO_DIR}/tsconfig.json"  # o alias @/ só resolve com o tsconfig do repo, qualquer que seja o cwd do cliente
 
 # ---- uninstall -------------------------------------------------------------
 if [[ "${1:-}" == "--uninstall" ]]; then
@@ -123,11 +124,11 @@ fi
 # ===========================================================================
 if command -v claude >/dev/null 2>&1; then
   claude mcp remove "${MCP_NAME}" -s user >/dev/null 2>&1 || true
-  claude mcp add "${MCP_NAME}" -s user -- "${TSX}" "${MCP_ENTRY}" >/dev/null
+  claude mcp add "${MCP_NAME}" -s user -- "${TSX}" --tsconfig "${MCP_TSCONFIG}" "${MCP_ENTRY}" >/dev/null
   echo "✓ Servidor MCP registrado: ${MCP_NAME} (escopo user)"
 else
   echo "  ! CLI 'claude' não encontrado no PATH. Registre o MCP à mão:"
-  echo "      claude mcp add ${MCP_NAME} -s user -- ${TSX} ${MCP_ENTRY}"
+  echo "      claude mcp add ${MCP_NAME} -s user -- ${TSX} --tsconfig ${MCP_TSCONFIG} ${MCP_ENTRY}"
 fi
 
 echo
