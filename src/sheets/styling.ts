@@ -745,6 +745,29 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
         right: { style: 'SOLID_MEDIUM', color: rgb(PALETTE.privacyAccent) },
       },
     })
+    // Seletor da janela do rendimento: mesma cor de controle do modo
+    // privacidade, na primeira linha e sobre a própria coluna F — sem mexer na
+    // largura dela.
+    requests.push({
+      repeatCell: {
+        range: grid(
+          dashboardId,
+          DASHBOARD.windowRow - 1,
+          DASHBOARD.windowRow,
+          DASHBOARD.returnColumn,
+          DASHBOARD.returnColumn + 1,
+        ),
+        cell: {
+          userEnteredFormat: {
+            backgroundColor: rgb(PALETTE.privacyAccent),
+            verticalAlignment: 'MIDDLE',
+            horizontalAlignment: 'CENTER',
+            textFormat: { bold: true, fontSize: 9, foregroundColor: rgb(PALETTE.headerText) },
+          },
+        },
+        fields: 'userEnteredFormat(backgroundColor,verticalAlignment,horizontalAlignment,textFormat)',
+      },
+    })
     // Coluna do rótulo larga o bastante para "🔒 Ocultar valores" caber sem
     // estourar por cima da coluna do checkbox.
     requests.push({

@@ -506,6 +506,18 @@ export const MIGRATIONS: Migration[] = [
       return actions
     },
   },
+  {
+    to: 8,
+    title: 'Histórico por objetivo e janela do rendimento',
+    description:
+      'Sete colunas novas NO FIM de `Histórico` (patrimônio por objetivo, depois das ' +
+      'classes) e uma lista suspensa em `Painel!F1` que troca a janela do "Rendimento %" ' +
+      'das tabelas de classe e de objetivo entre total acumulado, últimos 5 anos e últimos ' +
+      '12 meses. Aditiva: linhas antigas ficam com as células novas vazias. Para preenchê-las ' +
+      'retroativamente, rode no menu da planilha `Carteira → Reconstruir histórico por objetivo`.',
+    touchesData: false,
+    apply: async () => ['Nada a transformar — o instalador acrescenta cabeçalhos e a lista suspensa'],
+  },
 ]
 
 /**

@@ -37,6 +37,11 @@ import {
   type DataSheetSpec,
   type FormulaDialect,
   type ViewSheetSpec,
+  ASSETS_RETURN_HEADER,
+  RETURN_WINDOWS,
+  objectiveTotalRangeName,
+  returnHeaderFormula,
+  windowedReturnFormula,
 } from './schema'
 import { explainSheetsError, type SheetsContext } from './client'
 import { applyStyling } from './styling'
@@ -155,6 +160,11 @@ function viewSheetContent(spec: ViewSheetSpec): ValueRange[] {
   ]
 }
 
+/** Troca o cabeçalho da coluna de rendimento — a última — por `header`. */
+function withReturnHeader(headers: string[], header: string): string[] {
+  return headers.map((cell, column) => (column === DASHBOARD.returnColumn ? header : cell))
+}
+
 function dashboardContent(): ValueRange[] {
   const lastTableColumn = columnLetter(DASHBOARD_TABLE_COLUMNS - 1)
   const performanceColumn = columnLetter(DASHBOARD.performanceColumn)
@@ -177,7 +187,7 @@ function dashboardContent(): ValueRange[] {
       `=$C${row}-$D${row}`,
       // Pelo NOME, como o total ao lado: é a mesma célula que a aba da classe
       // mostra na linha 1, não uma segunda conta que poderia divergir dela.
-      `=${view.returnRangeName}`,
+      windowedReturnFormula(`=${view.returnRangeName}`, 'class', assetClass),
     ]
   })
 
@@ -196,7 +206,7 @@ function dashboardContent(): ValueRange[] {
       `=$C${row}-$D${row}`,
       // Não há intervalo nomeado por objetivo: o objetivo cruza as classes, e
       // a soma acontece aqui (ver `objectiveReturnFormula`).
-      objectiveReturnFormula(objective),
+      windowedReturnFormula(objectiveReturnFormula(objective), 'objective', objective),
     ]
   })
 
@@ -230,7 +240,7 @@ function dashboardContent(): ValueRange[] {
         DASHBOARD.title,
         `A${DASHBOARD.allocationHeaderRow}:${lastTableColumn}${DASHBOARD.allocationHeaderRow}`,
       ),
-      values: [DASHBOARD_ALLOCATION_HEADERS],
+      values: [withReturnHeader(DASHBOARD_ALLOCATION_HEADERS, returnHeaderFormula())],
     },
     { range: ref(DASHBOARD.title, `A${firstRow}:${lastTableColumn}${lastRow}`), values: allocationRows },
     {
@@ -238,7 +248,7 @@ function dashboardContent(): ValueRange[] {
         DASHBOARD.title,
         `A${DASHBOARD.objectivesHeaderRow}:${lastTableColumn}${DASHBOARD.objectivesHeaderRow}`,
       ),
-      values: [DASHBOARD_OBJECTIVE_HEADERS],
+      values: [withReturnHeader(DASHBOARD_OBJECTIVE_HEADERS, returnHeaderFormula())],
     },
     { range: ref(DASHBOARD.title, `A${objFirstRow}:${lastTableColumn}${objLastRow}`), values: objectiveRows },
     {
@@ -250,7 +260,7 @@ function dashboardContent(): ValueRange[] {
         DASHBOARD.title,
         `A${DASHBOARD.assetsHeaderRow}:${lastTableColumn}${DASHBOARD.assetsHeaderRow}`,
       ),
-      values: [DASHBOARD_ASSETS_HEADERS],
+      values: [withReturnHeader(DASHBOARD_ASSETS_HEADERS, ASSETS_RETURN_HEADER)],
     },
     {
       range: ref(DASHBOARD.title, `A${DASHBOARD.assetsFirstRow}`),
@@ -562,6 +572,21 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
     // Aba recém-criada: fica no padrão (desligado).
   }
 
+  // O seletor de janela do rendimento é o outro estado do usuário no Painel:
+  // mesma regra do checkbox, lido antes de limpar e restaurado depois.
+  const windowCell = ref(
+    DASHBOARD.title,
+    `${columnLetter(DASHBOARD.returnColumn)}${DASHBOARD.windowRow}`,
+  )
+  let windowValue: string = RETURN_WINDOWS[0].value
+  try {
+    const existingWindow = await api.spreadsheets.values.get({ spreadsheetId, range: windowCell })
+    const current = String(existingWindow.data.values?.[0]?.[0] ?? '')
+    if (RETURN_WINDOWS.some((window) => window.value === current)) windowValue = current
+  } catch {
+    // Aba recém-criada: fica no total acumulado.
+  }
+
   // Limpa o Painel por inteiro antes de reescrever. Sem isso, uma posição de
   // tabela que muda de versão pra versão (como aconteceu aqui — a tabela de
   // ativos já esteve em três linhas diferentes) deixa a escrita antiga presa
@@ -581,6 +606,7 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
     ...VIEW_SHEETS.flatMap(viewSheetContent),
     ...dashboardContent(),
     { range: privacyCell, values: [[privacyValue]] },
+    { range: windowCell, values: [[windowValue]] },
   ]
 
   // `Config` guarda as metas de alocação, que são suas para editar: só as
@@ -650,6 +676,12 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
   const namedTargets: Array<{ name: string; sheetTitle: string; row: number; column: number }> = [
     { name: NAMED_RANGE.fx, sheetTitle: SHEET.config, row: CONFIG_FX_ROW, column: 1 },
     { name: NAMED_RANGE.total, sheetTitle: DASHBOARD.title, row: DASHBOARD.totalRow, column: 1 },
+    ...OBJECTIVES.map((objective, index) => ({
+      name: objectiveTotalRangeName(objective),
+      sheetTitle: DASHBOARD.title,
+      row: DASHBOARD.objectivesFirstRow + index,
+      column: 1,
+    })),
     ...VIEW_SHEETS.flatMap((spec) => [
       { name: spec.totalRangeName, sheetTitle: spec.title, row: 1, column: spec.totalColumn },
       { name: spec.returnRangeName, sheetTitle: spec.title, row: 1, column: spec.returnColumn },
@@ -694,6 +726,26 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
           endColumnIndex: DASHBOARD.privacyCheckboxColumn + 1,
         },
         rule: { condition: { type: 'BOOLEAN' }, strict: true },
+      },
+    })
+    // Lista suspensa da janela do rendimento, na primeira linha da coluna F.
+    structureRequests.push({
+      setDataValidation: {
+        range: {
+          sheetId: dashboardIdForPrivacy,
+          startRowIndex: DASHBOARD.windowRow - 1,
+          endRowIndex: DASHBOARD.windowRow,
+          startColumnIndex: DASHBOARD.returnColumn,
+          endColumnIndex: DASHBOARD.returnColumn + 1,
+        },
+        rule: {
+          condition: {
+            type: 'ONE_OF_LIST',
+            values: RETURN_WINDOWS.map((window) => ({ userEnteredValue: window.value })),
+          },
+          showCustomUi: true,
+          strict: true,
+        },
       },
     })
   }

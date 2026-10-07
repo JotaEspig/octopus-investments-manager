@@ -23,7 +23,7 @@ import {
 import { MIN_DAYS_FOR_CAGR, PERFORMANCE_WINDOW_MONTHS } from '@/domain/performance'
 
 /** Gravada em `Config`. O instalador compara e avisa quando a planilha está velha. */
-export const SCHEMA_VERSION = 7
+export const SCHEMA_VERSION = 8
 
 /**
  * Chave em `Config` com o carimbo da última execução do Apps Script.
@@ -410,7 +410,7 @@ export const CDI_SHEET: DataSheetSpec = {
  */
 export const HISTORY_SHEET: DataSheetSpec = {
   title: SHEET.history,
-  writableColumns: 2 + ASSET_CLASSES.length,
+  writableColumns: 2 + ASSET_CLASSES.length + OBJECTIVES.length,
   columns: [
     { key: 'date', header: 'Data', format: 'date', width: 100 },
     { key: 'totalBRL', header: 'Patrimônio (R$)', format: 'brl', width: 150 },
@@ -419,6 +419,15 @@ export const HISTORY_SHEET: DataSheetSpec = {
       header: VIEW_SHEET[assetClass],
       format: 'brl' as ColumnFormat,
       width: 130,
+    })),
+    // Coluna nova no fim (v8): patrimônio por OBJETIVO, depois das classes. É o
+    // que permite o rendimento de janela (5 anos, 12 meses) por objetivo. O
+    // cabeçalho é o rótulo do objetivo; a chave é `goal_<objetivo>`.
+    ...OBJECTIVES.map((objective) => ({
+      key: `goal_${objective}`,
+      header: OBJECTIVE_LABELS[objective],
+      format: 'brl' as ColumnFormat,
+      width: 150,
     })),
   ],
 }
@@ -1058,6 +1067,12 @@ export const DASHBOARD = {
    * e os gráficos abaixo detalham.
    */
   performanceHeaderRow: 3,
+  /**
+   * Controle da janela do "Rendimento %": lista suspensa na PRIMEIRA linha,
+   * sobre a própria coluna (F). Só a tabela de classe e a de objetivo seguem
+   * ele; a de ativos fica sempre no total acumulado.
+   */
+  windowRow: 1,
   /** Linha dos últimos 12 meses; a do histórico total vem logo abaixo. */
   performanceFirstRow: 4,
   /**
@@ -1087,6 +1102,109 @@ export const DASHBOARD = {
   /** Cabeçalho da série (vira a legenda do gráfico); os pontos vêm abaixo. */
   evolutionDataRow: 1,
 } as const
+
+/**
+ * Janelas do "Rendimento %" no Painel. `value` é o que a lista suspensa
+ * guarda; `header` é o rótulo enxuto da coluna (cabe nos 170 px que ela já
+ * tem). `months: null` é o acumulado de sempre — ganho ÷ custo —, as demais
+ * são rentabilidade ponderada pelo tempo sobre o Histórico.
+ */
+export const RETURN_WINDOWS = [
+  { value: 'Total Acumulado', header: 'Rend. Total', months: null },
+  { value: 'Últimos 5 anos', header: 'Rend. 5 anos', months: 60 },
+  { value: 'Últimos 12 meses', header: 'Rend. 12 meses', months: 12 },
+] as const
+
+/**
+ * Intervalo nomeado com o total de cada objetivo (coluna B da tabela de
+ * objetivo do Painel) — o snapshot do Apps Script lê por aqui, como lê o das
+ * classes, e não por endereço de célula.
+ */
+export const objectiveTotalRangeName = (objective: Objective) =>
+  `TOTAL_GOAL_${objective.toUpperCase()}`
+
+/** Cabeçalho da coluna na tabela de ativos: sempre o total acumulado. */
+export const ASSETS_RETURN_HEADER = RETURN_WINDOWS[0].header
+
+/** Célula do controle de janela, absoluta (`$F$1`). */
+export function windowCell(): string {
+  return `$${columnLetterOfSchema(DASHBOARD.returnColumn)}$${DASHBOARD.windowRow}`
+}
+
+/** Cabeçalho das tabelas de classe e objetivo: muda com a janela escolhida. */
+export function returnHeaderFormula(): string {
+  const cases = RETURN_WINDOWS.map((window) => `"${window.value}";"${window.header}"`).join(';')
+  return `=SWITCH(${windowCell()};${cases};"${ASSETS_RETURN_HEADER}")`
+}
+
+/** Tira o `=` de uma fórmula para embuti-la noutra. */
+const bare = (formula: string) => formula.replace(/^=/, '')
+
+/**
+ * Rendimento % de uma CATEGORIA (uma classe ou um objetivo) numa janela de
+ * `months` meses — a rentabilidade ponderada pelo tempo de `twrExpression`,
+ * sobre a coluna da categoria no Histórico e só com os aportes dela.
+ *
+ * A categoria de cada operação vem do cadastro de HOJE (`Contratos RF` primeiro,
+ * depois `Ativos`), o mesmo critério do backfill do Histórico — por isso um
+ * ativo reclassificado muda de objetivo no passado inteiro, nos dois lados.
+ *
+ * Com menos histórico que a janela, é o histórico inteiro (como o quadro de
+ * rendimento). Sem série, devolve "—".
+ */
+function categoryWindowFormula(kind: 'class' | 'objective', key: string, months: number): string {
+  const lastLetter = columnLetterOfSchema(HISTORY_SHEET.columns.length - 1)
+  const historyBlock = ref(HISTORY_SHEET.title, `$A$2:$${lastLetter}`)
+  const historyDate = ref(HISTORY_SHEET.title, '$A$2:$A')
+  const columnKey = kind === 'class' ? key : `goal_${key}`
+  const index = HISTORY_SHEET.columns.findIndex((column) => column.key === columnKey) + 1
+  const tradeCol = (field: string) => {
+    const letter = columnLetterOfSchema(TRADES_SHEET.columns.findIndex((column) => column.key === field))
+    return ref(SHEET.trades, `$${letter}$2:$${letter}`)
+  }
+  const assetRange = (letter: string) => assets(`$${letter}$2:$${letter}`)
+  const contractRange = (letter: string) => contracts(`$${letter}$2:$${letter}`)
+
+  const categoryOf =
+    kind === 'class'
+      ? `IFERROR(IF(COUNTIF(${contractRange('A')};s)>0;"fixed_income";` +
+        `XLOOKUP(s;${assetRange('A')};${assetRange('C')}));"")`
+      : `LET(o;IFERROR(XLOOKUP(s;${contractRange('A')};${contractRange('L')});"");` +
+        `IF(o<>"";o;IFERROR(XLOOKUP(s;${assetRange('A')};${assetRange('F')});"")))`
+
+  return (
+    `=IFERROR(ARRAYFORMULA(LET(` +
+    `h;SORT(FILTER(${historyBlock};${historyDate}<>"");1;TRUE);` +
+    `hh;FILTER(h;ISNUMBER(INDEX(h;;${index})));` +
+    `hd;INT(INDEX(hh;;1));hv;INDEX(hh;;${index});` +
+    `ws;EDATE(MAX(hd);-${months});` +
+    `wd;FILTER(hd;hd>=ws);wv;FILTER(hv;hd>=ws);` +
+    `full;INDEX(wd;1)=INDEX(hd;1);` +
+    `td;IFERROR(INT(FILTER(${tradeCol('date')};${tradeCol('id')}<>""));0);` +
+    `ts;IFERROR(FILTER(${tradeCol('symbol')};${tradeCol('id')}<>"");"");` +
+    `tk;MAP(ts;LAMBDA(s;${categoryOf}));` +
+    `ta;IFERROR(FILTER(IF(${tradeCol('kind')}="buy";${tradeCol('netValueBRL')};-${tradeCol('netValueBRL')});` +
+    `${tradeCol('id')}<>"");0)*(tk="${key}");` +
+    `${twrExpression('wd', 'wv', 'full')}));"—")`
+  )
+}
+
+/**
+ * Célula "Rendimento %" de uma linha de classe ou de objetivo: o acumulado de
+ * sempre quando o controle diz "Total Acumulado", a janela nos outros casos.
+ */
+export function windowedReturnFormula(
+  total: string,
+  kind: 'class' | 'objective',
+  key: string,
+): string {
+  const [, five, twelve] = RETURN_WINDOWS
+  return (
+    `=IF(${windowCell()}="${five.value}";${bare(categoryWindowFormula(kind, key, five.months))};` +
+    `IF(${windowCell()}="${twelve.value}";${bare(categoryWindowFormula(kind, key, twelve.months))};` +
+    `${bare(total)}))`
+  )
+}
 
 export const DASHBOARD_ALLOCATION_HEADERS = [
   'Classe',

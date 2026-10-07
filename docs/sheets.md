@@ -75,3 +75,25 @@ falta.
 
 Regra de mudança de schema e migração: `CLAUDE.md` da raiz (é regra de
 funcionamento do versionamento, não de negócio).
+
+## Janela do "Rendimento %" no Painel
+
+`Painel!F1` é uma lista suspensa: **Total Acumulado**, **Últimos 5 anos**,
+**Últimos 12 meses**. Só a tabela de classe e a de objetivo a seguem — a de
+ativos fica sempre no total acumulado, porque não há histórico por ativo. O
+cabeçalho da coluna encolhe junto (`Rend. Total`, `Rend. 5 anos`,
+`Rend. 12 meses`) para não alargar a coluna F. A escolha sobrevive à
+reinstalação (lida antes de limpar o Painel, como o checkbox de privacidade).
+
+- **Total**: ganho ÷ custo, como sempre.
+- **5 anos / 12 meses**: rentabilidade ponderada pelo tempo (a mesma conta do
+  quadro de rendimento, ver `docs/domain.md`) sobre a coluna da categoria no
+  `Histórico`, com só os aportes dela. Com menos histórico que a janela, vale o
+  histórico inteiro; sem série, mostra "—".
+- O `Histórico` guarda o patrimônio por **classe** e, desde a v8, por
+  **objetivo** (colunas no fim). A categoria de cada operação vem do cadastro de
+  hoje, então reclassificar um ativo reclassifica o passado inteiro.
+- Linhas anteriores à v8 ficam com os objetivos vazios até rodar no menu
+  `Carteira → Reconstruir histórico por objetivo` (`backfillObjectives`): usa
+  posição do livro-razão, cotação histórica e marcação na curva, e relata a maior
+  diferença entre o total recalculado e o gravado como conferência.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ASSET_CLASSES, OBJECTIVE_LABELS } from '@/domain/types'
+import { ASSET_CLASSES, OBJECTIVES, OBJECTIVE_LABELS } from '@/domain/types'
 import {
   CHART_OFFSET_X_PIXELS,
   CHART_WIDTH_PIXELS,
@@ -13,6 +13,12 @@ import {
   DIALECT_PROBE,
   FALLBACK_TIME_ZONE,
   FORMULA_TOKEN,
+  HISTORY_SHEET,
+  RETURN_WINDOWS,
+  returnHeaderFormula,
+  windowedReturnFormula,
+  windowCell,
+  objectiveTotalRangeName,
   RETURN_PERCENT_HEADER,
   VIEW_FIRST_ROW,
   VIEW_SHEETS,
@@ -291,5 +297,55 @@ describe('tabelas do Painel', () => {
     // Ancorado na coluna anterior, começa pouco antes da coluna do quadro.
     expect(CHART_OFFSET_X_PIXELS).toBeLessThan(DASHBOARD.privacyCheckboxWidth)
     expect(CHART_OFFSET_X_PIXELS).toBeGreaterThanOrEqual(0)
+  })
+})
+
+describe('janela do rendimento no Painel', () => {
+  it('o controle fica na primeira linha, sobre a própria coluna de rendimento', () => {
+    expect(DASHBOARD.windowRow).toBe(1)
+    expect(windowCell()).toBe('$F$1')
+    expect(DASHBOARD.returnColumn).toBe(5)
+  })
+
+  it('o cabeçalho troca por rótulo enxuto conforme a janela', () => {
+    const header = returnHeaderFormula()
+    for (const window of RETURN_WINDOWS) {
+      expect(header).toContain(`"${window.value}";"${window.header}"`)
+      expect(window.header.length).toBeLessThanOrEqual(14)
+    }
+  })
+
+  it('o total acumulado é a fórmula de sempre; as janelas leem o Histórico', () => {
+    const total = '=RETORNO_ETF'
+    const formula = windowedReturnFormula(total, 'class', 'etf')
+    expect(formula.startsWith('=IF(')).toBe(true)
+    expect(formula).toContain('RETORNO_ETF')
+    expect(formula).toContain('EDATE(MAX(hd);-60)')
+    expect(formula).toContain('EDATE(MAX(hd);-12)')
+    expect(hasLeftoverTokens(formula)).toBe(false)
+    expect(isBalanced(formula)).toBe(true)
+  })
+
+  it('cada categoria lê a SUA coluna do Histórico', () => {
+    const etf = HISTORY_SHEET.columns.findIndex((column) => column.key === 'etf') + 1
+    expect(windowedReturnFormula('=X', 'class', 'etf')).toContain(`INDEX(h;;${etf})`)
+
+    const growth = HISTORY_SHEET.columns.findIndex((column) => column.key === 'goal_growth') + 1
+    expect(windowedReturnFormula('=X', 'objective', 'growth')).toContain(`INDEX(h;;${growth})`)
+  })
+})
+
+describe('histórico por objetivo', () => {
+  it('as colunas de objetivo vêm DEPOIS das de classe, no fim', () => {
+    const keys = HISTORY_SHEET.columns.map((column) => column.key)
+    expect(keys.slice(0, 2 + ASSET_CLASSES.length)).toEqual(['date', 'totalBRL', ...ASSET_CLASSES])
+    expect(keys.slice(2 + ASSET_CLASSES.length)).toEqual(OBJECTIVES.map((o) => `goal_${o}`))
+    expect(HISTORY_SHEET.writableColumns).toBe(HISTORY_SHEET.columns.length)
+  })
+
+  it('cada objetivo tem intervalo nomeado próprio, para o snapshot ler', () => {
+    const names = OBJECTIVES.map(objectiveTotalRangeName)
+    expect(new Set(names).size).toBe(OBJECTIVES.length)
+    expect(names[0]).toBe('TOTAL_GOAL_LIQUIDITY')
   })
 })

@@ -115,3 +115,12 @@ lá sem trocar aqui embaralha as colunas do histórico em silêncio.
 O backfill usa uma aba de rascunho temporária (`__backfill__`), criada e
 apagada em `finally`. É de propósito: fórmula histórica precisa de espaço e não
 pode esbarrar em dado de verdade num canto da `Config`.
+
+## Histórico por objetivo
+
+`snapshotWeekly` grava também uma coluna por objetivo, lida dos intervalos
+nomeados `TOTAL_GOAL_<OBJETIVO>`. `OBJECTIVE_ORDER` em `Code.gs` espelha
+`OBJECTIVES` de `src/domain/types.ts` — mesma regra do `CLASS_ORDER`: ordem
+trocada de um lado só embaralha o histórico em silêncio.
+`backfillObjectives` preenche só as células de objetivo vazias das linhas
+antigas; nunca reescreve total nem classes.

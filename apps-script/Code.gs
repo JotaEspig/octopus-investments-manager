@@ -72,6 +72,22 @@ const CLASS_TOTAL_RANGES = [
  */
 const CLASS_ORDER = ['us_stock', 'etf', 'br_stock', 'br_fii', 'fixed_income']
 
+/**
+ * Chaves de objetivo, na ordem das colunas de objetivo do `Histórico` (depois
+ * das de classe). Espelha `OBJECTIVES` de `src/domain/types.ts` — mesma
+ * regra do `CLASS_ORDER`: trocar a ordem lá sem trocar aqui embaralha o
+ * histórico em silêncio. Cada uma tem o intervalo nomeado `TOTAL_GOAL_<CHAVE>`.
+ */
+const OBJECTIVE_ORDER = [
+  'liquidity',
+  'passive_income',
+  'inflation_protection',
+  'predictable_yield',
+  'systemic_protection',
+  'growth',
+  'speculative',
+]
+
 /** Série 12 do SGS: CDI diário em % ao dia. Aberta, sem chave nem cadastro. */
 const SGS_CDI_URL = 'https://api.bcb.gov.br/dados/serie/bcdata.sgs.12/dados'
 
@@ -91,6 +107,7 @@ function onOpen() {
     .addItem('Atualizar agora', 'dailyUpdate')
     .addItem('Gravar snapshot da semana', 'snapshotWeekly')
     .addItem('Reconstruir meses faltantes', 'backfillHistoryWithFeedback')
+    .addItem('Reconstruir histórico por objetivo', 'backfillObjectivesWithFeedback')
     .addSeparator()
     .addItem('Ativar atualização diária', 'installTriggers')
     .addItem('Desativar atualização diária', 'removeTriggers')
@@ -654,6 +671,9 @@ function snapshotWeekly() {
   for (let i = 0; i < CLASS_TOTAL_RANGES.length; i += 1) {
     row.push(round2(readNamedNumber(spreadsheet, CLASS_TOTAL_RANGES[i])))
   }
+  for (let i = 0; i < OBJECTIVE_ORDER.length; i += 1) {
+    row.push(round2(readNamedNumber(spreadsheet, 'TOTAL_GOAL_' + OBJECTIVE_ORDER[i].toUpperCase())))
+  }
 
   const sheet = sheetByName(SHEETS.history)
   const existing = readRows(sheet, 1)
@@ -745,6 +765,76 @@ function backfillHistory() {
   return rows.length
 }
 
+/**
+ * Preenche as colunas de OBJETIVO do `Histórico` nas linhas que já existem.
+ *
+ * As colunas entraram na v8; as linhas anteriores ficaram com elas vazias. Para
+ * cada data gravada, recalcula a posição pelo livro-razão e a cotação histórica
+ * (o mesmo caminho de `backfillHistory`) e escreve SÓ as células de objetivo
+ * vazias — patrimônio total e classes, que já foram gravados, não são tocados.
+ *
+ * Como conferência, compara o total recalculado com o gravado em cada data e
+ * relata a maior diferença: se divergir muito, a reconstrução (ou um preço
+ * histórico que o GOOGLEFINANCE não devolveu) merece desconfiança.
+ */
+function backfillObjectivesWithFeedback() {
+  const result = backfillObjectives()
+  SpreadsheetApp.getUi().alert(
+    result.filled === 0
+      ? 'Nenhuma linha do histórico com objetivo vazio.'
+      : result.filled +
+          ' linha(s) do histórico preenchida(s) por objetivo.\n\n' +
+          'Maior diferença entre o total recalculado e o gravado: R$ ' +
+          result.maxDiff.toFixed(2) +
+          ' (' + (result.maxDiffPct * 100).toFixed(2) + '%), em ' + result.maxDiffDate + '.\n\n' +
+          'Valores por objetivo calculados com a cotação de fechamento de cada data, a posição ' +
+          'que o livro-razão tinha naquele momento e o objetivo cadastrado hoje.',
+  )
+}
+
+function backfillObjectives() {
+  const sheet = sheetByName(SHEETS.history)
+  const firstObjectiveColumn = 2 + CLASS_ORDER.length + 1
+  const rows = readRows(sheet, firstObjectiveColumn + OBJECTIVE_ORDER.length - 1)
+  const result = { filled: 0, maxDiff: 0, maxDiffPct: 0, maxDiffDate: '' }
+
+  const todo = []
+  for (let i = 0; i < rows.length; i += 1) {
+    let blank = false
+    for (let j = 0; j < OBJECTIVE_ORDER.length; j += 1) {
+      if (rows[i][firstObjectiveColumn - 1 + j] === '') blank = true
+    }
+    if (blank && rows[i][0]) todo.push(i)
+  }
+  if (todo.length === 0) return result
+
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet()
+  const scratch = spreadsheet.insertSheet('__backfill__')
+  try {
+    for (let k = 0; k < todo.length; k += 1) {
+      const i = todo[k]
+      const asOf = toIso(rows[i][0])
+      const fresh = portfolioValueAt(asOf, scratch)
+
+      const objectives = fresh.slice(firstObjectiveColumn - 1)
+      sheet.getRange(i + 2, firstObjectiveColumn, 1, objectives.length).setValues([objectives])
+
+      const stored = Number(rows[i][1]) || 0
+      const diff = Math.abs(fresh[1] - stored)
+      if (diff > result.maxDiff) {
+        result.maxDiff = diff
+        result.maxDiffPct = stored > 0 ? diff / stored : 0
+        result.maxDiffDate = asOf
+      }
+      result.filled += 1
+    }
+  } finally {
+    spreadsheet.deleteSheet(scratch)
+  }
+
+  return result
+}
+
 /** Meses entre o primeiro aporte e hoje que não têm linha no histórico. */
 function missingMonths() {
   const trades = readRows(sheetByName(SHEETS.trades), 2)
@@ -797,7 +887,7 @@ function lastDayOfMonth(yyyymm) {
  * resultado e descarta — uma ida à rede por mês, e não por ativo.
  */
 function portfolioValueAt(asOf, scratch) {
-  const assets = readRows(sheetByName(SHEETS.assets), 4)
+  const assets = readRows(sheetByName(SHEETS.assets), 6)
   const symbols = []
   const formulas = []
 
@@ -806,8 +896,9 @@ function portfolioValueAt(asOf, scratch) {
     if (!symbol) continue
     const assetClass = String(assets[i][2] || '').trim()
     const currency = String(assets[i][3] || 'BRL').trim()
+    const objective = String(assets[i][5] || '').trim()
     const brazilian = currency === 'BRL'
-    symbols.push({ symbol: symbol, assetClass: assetClass, currency: currency })
+    symbols.push({ symbol: symbol, assetClass: assetClass, currency: currency, objective: objective })
     formulas.push([historicalCloseFormula(brazilian ? 'BVMF:' + symbol : symbol, asOf)])
   }
 
@@ -823,6 +914,10 @@ function portfolioValueAt(asOf, scratch) {
 
   const byClass = {}
   for (let i = 0; i < CLASS_ORDER.length; i += 1) byClass[CLASS_ORDER[i]] = 0
+  // Por objetivo, pelo cadastro de HOJE — o mesmo critério da fórmula de
+  // rendimento por janela, para a conta ficar coerente de ponta a ponta.
+  const byObjective = {}
+  for (let i = 0; i < OBJECTIVE_ORDER.length; i += 1) byObjective[OBJECTIVE_ORDER[i]] = 0
 
   for (let i = 0; i < symbols.length; i += 1) {
     const quantity = quantityAt(symbols[i].symbol, asOf)
@@ -833,15 +928,21 @@ function portfolioValueAt(asOf, scratch) {
     const value = quantity * price * (usd ? fx : 1)
 
     if (byClass[symbols[i].assetClass] !== undefined) byClass[symbols[i].assetClass] += value
+    if (byObjective[symbols[i].objective] !== undefined) byObjective[symbols[i].objective] += value
   }
 
-  byClass.fixed_income = fixedIncomeValueAt(asOf)
+  const fixedIncome = fixedIncomeValueAt(asOf)
+  byClass.fixed_income = fixedIncome.total
+  for (const goal in fixedIncome.byObjective) {
+    if (byObjective[goal] !== undefined) byObjective[goal] += fixedIncome.byObjective[goal]
+  }
 
   const row = [new Date(asOf + 'T12:00:00Z')]
   let total = 0
   for (let i = 0; i < CLASS_ORDER.length; i += 1) total += byClass[CLASS_ORDER[i]]
   row.push(round2(total))
   for (let i = 0; i < CLASS_ORDER.length; i += 1) row.push(round2(byClass[CLASS_ORDER[i]]))
+  for (let i = 0; i < OBJECTIVE_ORDER.length; i += 1) row.push(round2(byObjective[OBJECTIVE_ORDER[i]]))
 
   return row
 }
@@ -879,14 +980,17 @@ function quantityAt(symbol, asOf) {
   return quantity
 }
 
-/** Renda fixa marcada na curva até a data — reaproveita `markToCurve`. */
+/**
+ * Renda fixa marcada na curva até a data — reaproveita `markToCurve`.
+ * Devolve o total e a parte de cada objetivo (pelo cadastro de `Contratos RF`).
+ */
 function fixedIncomeValueAt(asOf) {
-  const contracts = readRows(sheetByName(SHEETS.fixedIncome), 11)
-  if (contracts.length === 0) return 0
+  const contracts = readRows(sheetByName(SHEETS.fixedIncome), 12)
+  const result = { total: 0, byObjective: {} }
+  if (contracts.length === 0) return result
 
   const series = readCdiSeries()
   const applications = readApplicationsBySymbol()
-  let total = 0
 
   for (let i = 0; i < contracts.length; i += 1) {
     const symbol = String(contracts[i][0] || '').trim()
@@ -894,18 +998,24 @@ function fixedIncomeValueAt(asOf) {
 
     const indexer = String(contracts[i][3] || 'cdi').trim()
     const rate = Number(contracts[i][4]) || 0
+    const objective = String(contracts[i][11] || '').trim()
     const entries = applications[symbol] || []
 
+    let value = 0
     for (let j = 0; j < entries.length; j += 1) {
       if (entries[j].date > asOf) continue
-      total +=
+      value +=
         entries[j].kind === 'buy'
           ? markToCurve(entries[j].amount, indexer, rate, entries[j].date, asOf, series)
           : -entries[j].amount
     }
+
+    result.total += value
+    result.byObjective[objective] = (result.byObjective[objective] || 0) + value
   }
 
-  return Math.max(0, total)
+  result.total = Math.max(0, result.total)
+  return result
 }
 
 /** Ordena o histórico por data — o backfill anexa no fim, fora de ordem. */
