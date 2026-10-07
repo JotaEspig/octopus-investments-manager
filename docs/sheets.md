@@ -85,11 +85,14 @@ cabeçalho da coluna encolhe junto (`Rend. Total`, `Rend. 5 anos`,
 `Rend. 12 meses`) para não alargar a coluna F. A escolha sobrevive à
 reinstalação (lida antes de limpar o Painel, como o checkbox de privacidade).
 
-- **Total**: ganho ÷ custo, como sempre.
-- **5 anos / 12 meses**: rentabilidade ponderada pelo tempo (a mesma conta do
-  quadro de rendimento, ver `docs/domain.md`) sobre a coluna da categoria no
-  `Histórico`, com só os aportes dela. Com menos histórico que a janela, vale o
-  histórico inteiro; sem série, mostra "—".
+- **Total / 5 anos / 12 meses**: a MESMA conta nas três — rentabilidade
+  ponderada pelo tempo (a do quadro de rendimento, ver `docs/domain.md`) sobre a
+  coluna da categoria no `Histórico`, com só os aportes dela. Em reais, com
+  proventos e com o efeito do câmbio. O Total começa no primeiro registro; as
+  janelas, 5 anos / 12 meses antes do último. Com menos histórico que a janela,
+  as três dão o mesmo número; sem série, mostra "—".
+- A tabela de ativos é a exceção: segue ganho ÷ custo na moeda do ativo, sem
+  proventos nem câmbio, e por isso pode divergir da linha da própria classe.
 - O `Histórico` guarda o patrimônio por **classe** e, desde a v8, por
   **objetivo** (colunas no fim). A categoria de cada operação vem do cadastro de
   hoje, então reclassificar um ativo reclassifica o passado inteiro.

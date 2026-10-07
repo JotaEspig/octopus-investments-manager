@@ -1152,7 +1152,7 @@ const bare = (formula: string) => formula.replace(/^=/, '')
  * Com menos histórico que a janela, é o histórico inteiro (como o quadro de
  * rendimento). Sem série, devolve "—".
  */
-function categoryWindowFormula(kind: 'class' | 'objective', key: string, months: number): string {
+function categoryWindowFormula(kind: 'class' | 'objective', key: string, months: number | null): string {
   const lastLetter = columnLetterOfSchema(HISTORY_SHEET.columns.length - 1)
   const historyBlock = ref(HISTORY_SHEET.title, `$A$2:$${lastLetter}`)
   const historyDate = ref(HISTORY_SHEET.title, '$A$2:$A')
@@ -1177,7 +1177,8 @@ function categoryWindowFormula(kind: 'class' | 'objective', key: string, months:
     `h;SORT(FILTER(${historyBlock};${historyDate}<>"");1;TRUE);` +
     `hh;FILTER(h;ISNUMBER(INDEX(h;;${index})));` +
     `hd;INT(INDEX(hh;;1));hv;INDEX(hh;;${index});` +
-    `ws;EDATE(MAX(hd);-${months});` +
+    // Sem janela (`null`), o histórico inteiro: é o "Total Acumulado".
+    `ws;${months === null ? 'MIN(hd)' : `EDATE(MAX(hd);-${months})`};` +
     `wd;FILTER(hd;hd>=ws);wv;FILTER(hv;hd>=ws);` +
     `full;INDEX(wd;1)=INDEX(hd;1);` +
     `td;IFERROR(INT(FILTER(${tradeCol('date')};${tradeCol('id')}<>""));0);` +
@@ -1190,19 +1191,18 @@ function categoryWindowFormula(kind: 'class' | 'objective', key: string, months:
 }
 
 /**
- * Célula "Rendimento %" de uma linha de classe ou de objetivo: o acumulado de
- * sempre quando o controle diz "Total Acumulado", a janela nos outros casos.
+ * Célula "Rendimento %" de uma linha de classe ou de objetivo, conforme o
+ * controle: o histórico inteiro ("Total Acumulado") ou a janela de 5 anos /
+ * 12 meses. As três são a MESMA conta — em reais, com proventos e com o
+ * câmbio —, só muda de onde ela começa. Com menos histórico que a janela, as
+ * três dão o mesmo número.
  */
-export function windowedReturnFormula(
-  total: string,
-  kind: 'class' | 'objective',
-  key: string,
-): string {
+export function windowedReturnFormula(kind: 'class' | 'objective', key: string): string {
   const [, five, twelve] = RETURN_WINDOWS
   return (
     `=IF(${windowCell()}="${five.value}";${bare(categoryWindowFormula(kind, key, five.months))};` +
     `IF(${windowCell()}="${twelve.value}";${bare(categoryWindowFormula(kind, key, twelve.months))};` +
-    `${bare(total)}))`
+    `${bare(categoryWindowFormula(kind, key, null))}))`
   )
 }
 

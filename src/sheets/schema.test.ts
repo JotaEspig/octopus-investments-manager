@@ -315,23 +315,23 @@ describe('janela do rendimento no Painel', () => {
     }
   })
 
-  it('o total acumulado é a fórmula de sempre; as janelas leem o Histórico', () => {
-    const total = '=RETORNO_ETF'
-    const formula = windowedReturnFormula(total, 'class', 'etf')
+  it('total e janelas são a mesma conta, só muda onde começa', () => {
+    const formula = windowedReturnFormula('class', 'etf')
     expect(formula.startsWith('=IF(')).toBe(true)
-    expect(formula).toContain('RETORNO_ETF')
     expect(formula).toContain('EDATE(MAX(hd);-60)')
     expect(formula).toContain('EDATE(MAX(hd);-12)')
+    expect(formula).toContain('ws;MIN(hd)')
+    expect(formula).not.toContain('RETORNO_')
     expect(hasLeftoverTokens(formula)).toBe(false)
     expect(isBalanced(formula)).toBe(true)
   })
 
   it('cada categoria lê a SUA coluna do Histórico', () => {
     const etf = HISTORY_SHEET.columns.findIndex((column) => column.key === 'etf') + 1
-    expect(windowedReturnFormula('=X', 'class', 'etf')).toContain(`INDEX(h;;${etf})`)
+    expect(windowedReturnFormula('class', 'etf')).toContain(`INDEX(h;;${etf})`)
 
     const growth = HISTORY_SHEET.columns.findIndex((column) => column.key === 'goal_growth') + 1
-    expect(windowedReturnFormula('=X', 'objective', 'growth')).toContain(`INDEX(h;;${growth})`)
+    expect(windowedReturnFormula('objective', 'growth')).toContain(`INDEX(h;;${growth})`)
   })
 })
 

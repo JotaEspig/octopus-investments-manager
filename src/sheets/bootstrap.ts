@@ -30,7 +30,6 @@ import {
   dashboardAssetsFormula,
   evolutionSeriesFormula,
   localizeValue,
-  objectiveReturnFormula,
   objectiveTotalFormula,
   performanceRowFormulas,
   ref,
@@ -187,7 +186,7 @@ function dashboardContent(): ValueRange[] {
       `=$C${row}-$D${row}`,
       // Pelo NOME, como o total ao lado: é a mesma célula que a aba da classe
       // mostra na linha 1, não uma segunda conta que poderia divergir dela.
-      windowedReturnFormula(`=${view.returnRangeName}`, 'class', assetClass),
+      windowedReturnFormula('class', assetClass),
     ]
   })
 
@@ -206,7 +205,7 @@ function dashboardContent(): ValueRange[] {
       `=$C${row}-$D${row}`,
       // Não há intervalo nomeado por objetivo: o objetivo cruza as classes, e
       // a soma acontece aqui (ver `objectiveReturnFormula`).
-      windowedReturnFormula(objectiveReturnFormula(objective), 'objective', objective),
+      windowedReturnFormula('objective', objective),
     ]
   })
 
