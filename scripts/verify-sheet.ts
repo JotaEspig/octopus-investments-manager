@@ -30,6 +30,7 @@ import { readPerformanceSeries } from '../src/sheets/repositories'
 import {
   DASHBOARD,
   DASHBOARD_PERFORMANCE_HEADERS,
+  HISTORY_SHEET,
   EVOLUTION_CHART_ROWS,
   EVOLUTION_DATA_HEADERS,
   VIEW_FIRST_ROW,
@@ -37,11 +38,17 @@ import {
   VIEW_SHEETS,
   ref,
 } from '../src/sheets/schema'
-import { cdiBenchmarkSeries, performanceOverview, performanceWindow } from '../src/domain/performance'
+import {
+  cdiBenchmarkSeries,
+  performanceOverview,
+  performanceWindow,
+  timeWeightedReturn,
+  type HistoryPoint,
+} from '../src/domain/performance'
 import { fromSheetDate } from '../src/lib/dates'
 import { columnLetter } from '../src/sheets/bootstrap'
 import { parseNumber } from '../src/lib/money'
-import { ASSET_CLASS_LABELS, OBJECTIVE_LABELS, OBJECTIVES, type Position } from '../src/domain/types'
+import { ASSET_CLASS_LABELS, OBJECTIVE_LABELS, OBJECTIVES, type Position, type Trade } from '../src/domain/types'
 
 /**
  * Diferença tolerada num percentual, em pontos fracionários (0,0001 = 0,01 p.p.).
@@ -107,9 +114,42 @@ function aggregateReturn(positions: readonly Position[]): number {
   return cost === 0 ? 0 : gain / cost
 }
 
+/**
+ * "Total Acumulado" do Painel para uma categoria (classe ou objetivo): a
+ * rentabilidade ponderada pelo tempo sobre a coluna dela no Histórico, só com
+ * os aportes dela — em reais, com proventos e câmbio. É a conta que a fórmula
+ * do Painel duplica; a autoridade é `timeWeightedReturn`.
+ */
+function categoryTotalReturn(
+  historyRows: unknown[][],
+  columnKey: string,
+  trades: Trade[],
+  belongs: (symbol: string) => boolean,
+): number | null {
+  const column = HISTORY_SHEET.columns.findIndex((candidate) => candidate.key === columnKey)
+  const points: HistoryPoint[] = historyRows
+    .filter((row) => typeof row[column] === 'number')
+    .map((row) => ({ date: fromSheetDate(row[0]), totalBRL: row[column] as number }))
+    .filter((point) => point.date)
+    .sort((a, b) => a.date.localeCompare(b.date))
+  return timeWeightedReturn(
+    points,
+    trades.filter((trade) => belongs(trade.symbol)),
+    true,
+  )
+}
+
 async function main() {
   const context = getSheetsContext()
   const { positions, summary, data } = await loadPortfolio()
+  const historyRows = (
+    await context.api.spreadsheets.values.get({
+      spreadsheetId: context.spreadsheetId,
+      range: ref(HISTORY_SHEET.title, `A2:${columnLetter(HISTORY_SHEET.columns.length - 1)}`),
+      valueRenderOption: 'UNFORMATTED_VALUE',
+      dateTimeRenderOption: 'FORMATTED_STRING',
+    })
+  ).data.values as unknown[][] | undefined ?? []
 
   // A ordem importa: as respostas voltam na ordem dos pedidos, e é dela que
   // saem os índices usados na leitura (`rowsAt`, `classReturnAt`, `afterViews`).
@@ -262,7 +302,9 @@ async function main() {
       `${DASHBOARD.title} · objetivo`,
       `rendimento % — ${OBJECTIVE_LABELS[objective]}`,
       parseNumber(objectiveReturns[index]?.[0]),
-      aggregateReturn(positions.filter((position) => position.objective === objective)),
+      categoryTotalReturn(historyRows, `goal_${objective}`, data.trades, (symbol) =>
+        positions.some((position) => position.symbol === symbol && position.objective === objective),
+      ) ?? 0,
     )
   })
 
@@ -274,11 +316,15 @@ async function main() {
   VIEW_SHEETS.forEach((spec, index) => {
     const expected = aggregateReturn(positions.filter((p) => p.assetClass === spec.assetClass))
     comparePercent(spec.title, 'rendimento % da classe', classReturnAt(index), expected)
+    // O Painel não copia mais a linha 1 da aba: é o total acumulado em reais
+    // (ponderado pelo tempo, com proventos e câmbio), não ganho ÷ custo.
     comparePercent(
       `${DASHBOARD.title} · classe`,
       `rendimento % — ${ASSET_CLASS_LABELS[spec.assetClass]}`,
       parseNumber(allocationReturns[index]?.[0]),
-      expected,
+      categoryTotalReturn(historyRows, spec.assetClass, data.trades, (symbol) =>
+        positions.some((position) => position.symbol === symbol && position.assetClass === spec.assetClass),
+      ) ?? 0,
     )
   })
 
