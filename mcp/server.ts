@@ -25,14 +25,16 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { ASSET_CLASSES } from '../src/domain/types'
+import { ASSET_CLASSES, ASSET_CLASS_LABELS, OBJECTIVES, OBJECTIVE_LABELS } from '../src/domain/types'
 import { summarizePerformance } from '../src/domain/returns'
 import { netOfTax } from '../src/domain/fixed-income'
 import {
   cdiBenchmarkSeries,
   MIN_DAYS_FOR_CAGR,
+  categoryReturns,
   performanceOverview,
   performanceWindow,
+  tradesByCategory,
 } from '../src/domain/performance'
 import { today } from '../src/lib/dates'
 import { getSheetsContext } from '../src/sheets/client'
@@ -245,13 +247,20 @@ server.registerTool(
       'mais cada aporte na data dele, menos vendas e proventos) aplicado 100% no CDI — ' +
       'diferença em reais do que a carteira ganhou ou perdeu contra o CDI. Tudo em reais. ' +
       'Aproximação declarada: o aporte conta como se entrasse no começo da semana em que ' +
-      'caiu; em meses antigos com snapshot mensal o erro é maior.',
+      'caiu; em meses antigos com snapshot mensal o erro é maior. `byClass` e `byObjective` ' +
+      'trazem o rendimento de cada classe e de cada objetivo — os números do "Rendimento %" ' +
+      'do Painel: `total` (histórico inteiro), `fiveYears` e `twelveMonths`, todos em REAIS, ' +
+      'com proventos e câmbio, só com os aportes da categoria. É diferente do rendimento ' +
+      'por ativo de `portfolio_positions` (ganho ÷ custo na moeda do ativo): para uma ' +
+      'categoria com ativos em dólar os dois divergem, e este é o que o investidor ganhou. ' +
+      'Com menos histórico que a janela, `fiveYears`/`twelveMonths` repetem `total`; `null` ' +
+      'quando a categoria não tem série (objetivo ainda não reconstruído no Histórico).',
     inputSchema: {},
   },
   async () => {
     try {
       const context = getSheetsContext()
-      const [{ data }, { history, cdi }] = await Promise.all([
+      const [{ data }, { history, categories, cdi }] = await Promise.all([
         loadPortfolio(context),
         readPerformanceSeries(context),
       ])
@@ -270,7 +279,21 @@ server.registerTool(
         portfolioBRL: point.totalBRL,
         cdiBRL: Math.round((benchmark[index] ?? 0) * 100) / 100,
       }))
-      return json({ ...overview, series })
+      const categoryTrades = tradesByCategory(data.assets, data.contracts, data.trades)
+      const byClass = ASSET_CLASSES.map((assetClass) => ({
+        assetClass,
+        label: ASSET_CLASS_LABELS[assetClass],
+        ...categoryReturns(categories[assetClass] ?? [], categoryTrades.byClass.get(assetClass) ?? []),
+      }))
+      const byObjective = OBJECTIVES.map((objective) => ({
+        objective,
+        label: OBJECTIVE_LABELS[objective],
+        ...categoryReturns(
+          categories[`goal_${objective}`] ?? [],
+          categoryTrades.byObjective.get(objective) ?? [],
+        ),
+      }))
+      return json({ ...overview, byClass, byObjective, series })
     } catch (error) {
       return failure(error)
     }

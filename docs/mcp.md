@@ -48,3 +48,10 @@ printf '%s\n' \
  '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
  | npx tsx mcp/server.ts
 ```
+
+## Rendimento por categoria
+
+`portfolio_evolution` expõe `byClass` e `byObjective`, calculados por
+`categoryReturns` (`src/domain/performance.ts`) — a mesma conta que o Painel
+duplica em fórmula (`categoryWindowFormula`) e que `verify:sheet` confere.
+Em reais, com proventos e câmbio; não é o `returnNative` por ativo.

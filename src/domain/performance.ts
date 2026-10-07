@@ -1,6 +1,6 @@
 import { netValue } from './average-cost'
 import { calendarDaysBetween, type CdiEntry } from './fixed-income'
-import type { Trade } from './types'
+import type { Asset, AssetClass, FixedIncomeContract, Objective, Trade } from './types'
 
 /**
  * Evolução da carteira comparada ao CDI — o gráfico e o quadro de rendimento
@@ -231,4 +231,74 @@ export function performanceOverview(
           : annualize(total.portfolioReturn, calendarDaysBetween(inception, last.date)),
     },
   }
+}
+
+/** Janelas do "Rendimento %" por categoria no Painel, em meses. */
+export const CATEGORY_WINDOW_MONTHS = { fiveYears: 60, twelveMonths: 12 } as const
+
+export interface CategoryReturns {
+  /** Histórico inteiro, do primeiro aporte da categoria ao último snapshot. */
+  total: number | null
+  fiveYears: number | null
+  twelveMonths: number | null
+}
+
+/**
+ * Rendimento de uma categoria (uma classe ou um objetivo) em reais, com
+ * proventos e câmbio — o espelho de `categoryWindowFormula` em `schema.ts`, e
+ * a autoridade quando os dois divergirem.
+ *
+ * `points` é a coluna da categoria no `Histórico`; `trades`, SÓ as operações
+ * dela. Com menos histórico que a janela, a janela é o histórico inteiro e dá o
+ * mesmo número do total.
+ */
+export function categoryReturns(
+  points: readonly HistoryPoint[],
+  trades: readonly Trade[],
+): CategoryReturns {
+  const sorted = [...points].sort((a, b) => a.date.localeCompare(b.date))
+  const total = timeWeightedReturn(sorted, trades, true)
+
+  const windowed = (months: number) => {
+    const window = performanceWindow(sorted, months)
+    return window[0] && window[0].date === sorted[0]?.date
+      ? total
+      : timeWeightedReturn(window, trades, false)
+  }
+
+  return {
+    total,
+    fiveYears: windowed(CATEGORY_WINDOW_MONTHS.fiveYears),
+    twelveMonths: windowed(CATEGORY_WINDOW_MONTHS.twelveMonths),
+  }
+}
+
+/**
+ * Separa as operações por classe e por objetivo, pelo cadastro de HOJE —
+ * `Contratos RF` primeiro, depois `Ativos`, como a fórmula do Painel. É o que
+ * permite o rendimento de uma categoria só com os aportes dela.
+ */
+export function tradesByCategory(
+  assets: readonly Asset[],
+  contracts: readonly FixedIncomeContract[],
+  trades: readonly Trade[],
+): { byClass: Map<AssetClass, Trade[]>; byObjective: Map<Objective, Trade[]> } {
+  const assetBySymbol = new Map(assets.map((asset) => [asset.symbol, asset]))
+  const contractBySymbol = new Map(contracts.map((contract) => [contract.symbol, contract]))
+  const byClass = new Map<AssetClass, Trade[]>()
+  const byObjective = new Map<Objective, Trade[]>()
+  const push = <K>(map: Map<K, Trade[]>, key: K, trade: Trade) => {
+    map.set(key, [...(map.get(key) ?? []), trade])
+  }
+
+  for (const trade of trades) {
+    const contract = contractBySymbol.get(trade.symbol)
+    const asset = assetBySymbol.get(trade.symbol)
+    const assetClass = contract ? 'fixed_income' : asset?.assetClass
+    const objective = contract?.objective || asset?.objective
+    if (assetClass) push(byClass, assetClass, trade)
+    if (objective) push(byObjective, objective, trade)
+  }
+
+  return { byClass, byObjective }
 }

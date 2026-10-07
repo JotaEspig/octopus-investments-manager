@@ -226,7 +226,12 @@ export async function readPortfolioData(context: SheetsContext): Promise<Portfol
  */
 export async function readPerformanceSeries(
   context: SheetsContext,
-): Promise<{ history: HistoryPoint[]; cdi: CdiEntry[] }> {
+): Promise<{
+  history: HistoryPoint[]
+  /** Uma série por coluna de categoria do Histórico (classes e `goal_<objetivo>`). */
+  categories: Record<string, HistoryPoint[]>
+  cdi: CdiEntry[]
+}> {
   let response: sheets_v4.Schema$BatchGetValuesResponse
   try {
     const result = await context.api.spreadsheets.values.batchGet({
@@ -249,6 +254,21 @@ export async function readPerformanceSeries(
     .filter((point) => point.date)
     .sort((a, b) => a.date.localeCompare(b.date))
 
+  // Células vazias ficam de fora: linhas anteriores à v8 não têm objetivo até o
+  // backfill, e "sem dado" não é zero.
+  const categories: Record<string, HistoryPoint[]> = {}
+  for (const column of HISTORY_SHEET.columns.slice(2)) {
+    const index = indexOf(HISTORY_SHEET, column.key)
+    categories[column.key] = (historyRows ?? [])
+      .filter((row) => typeof row[index] === 'number')
+      .map((row) => ({
+        date: fromSheetDate(row[indexOf(HISTORY_SHEET, 'date')]),
+        totalBRL: row[index] as number,
+      }))
+      .filter((point) => point.date)
+      .sort((a, b) => a.date.localeCompare(b.date))
+  }
+
   const cdi = (cdiRows ?? [])
     .map((row) => ({
       date: fromSheetDate(row[indexOf(CDI_SHEET, 'date')]),
@@ -257,7 +277,7 @@ export async function readPerformanceSeries(
     .filter((entry) => entry.date)
     .sort((a, b) => a.date.localeCompare(b.date))
 
-  return { history, cdi }
+  return { history, categories, cdi }
 }
 
 // ---------------------------------------------------------------------------

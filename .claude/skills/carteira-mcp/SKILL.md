@@ -27,7 +27,7 @@ de cada coisa, é retrabalho quando o número está a uma chamada de distância.
 | `portfolio_asset` | Uma tese específica: histórico completo de operações do papel, e para RF a simulação de resgate com IR. |
 | `portfolio_trades` | Ritmo de aportes, auditoria de como uma posição se formou. |
 | `portfolio_performance` | "Quanto rendeu?" — traz retorno simples e XIRR. |
-| `portfolio_evolution` | "Estou batendo o CDI?" — rentabilidade da carteira e CDI no mesmo período (12 meses e histórico total), CAGR e a série semanal contra o CDI. |
+| `portfolio_evolution` | "Estou batendo o CDI?" — rentabilidade da carteira e CDI no mesmo período (12 meses e histórico total), CAGR e a série semanal contra o CDI. Traz também `byClass` e `byObjective`: o rendimento de cada classe e objetivo (total, 5 anos, 12 meses). |
 
 Todas são **somente leitura**. Não existe tool de escrita, e isso é
 intencional: o usuário registra as operações na interface. Se ele pedir para
@@ -134,3 +134,15 @@ interface, que faz o diagnóstico passo a passo.
   `portfolio_summary`.
 - `analise-mercado` — avaliar um ativo específico. Use junto com
   `portfolio_asset` ao discutir aumentar, reduzir ou sair de uma posição.
+
+### Rendimento por classe e por objetivo ≠ rendimento por ativo
+`portfolio_evolution` devolve `byClass` e `byObjective` — os números do
+"Rendimento %" do Painel. São **em reais, com proventos e câmbio**, ponderados
+pelo tempo e só com os aportes da categoria. O `returnNative` de
+`portfolio_positions` é outra coisa: ganho ÷ custo na moeda do ativo, sem
+proventos. Para uma categoria com ativos em dólar os dois divergem, e o de
+reais é o que o investidor ganhou — **diga qual está usando**.
+
+Com menos histórico que a janela, `fiveYears` e `twelveMonths` repetem
+`total` (a carteira é recente, não é erro). `null` significa que a categoria
+não tem série no Histórico — por exemplo, objetivo ainda não reconstruído.

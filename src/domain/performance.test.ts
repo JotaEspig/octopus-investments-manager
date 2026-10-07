@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { CdiEntry } from './fixed-income'
 import {
   annualize,
+  categoryReturns,
   cdiBenchmarkSeries,
   cdiFactor,
   contributionsBetween,
@@ -9,6 +10,7 @@ import {
   performanceOverview,
   performanceWindow,
   subtractMonths,
+  tradesByCategory,
   timeWeightedReturn,
   type HistoryPoint,
 } from './performance'
@@ -181,5 +183,54 @@ describe('performanceOverview', () => {
 
   it('sem histórico, não responde', () => {
     expect(performanceOverview([], [], cdi)).toBeNull()
+  })
+})
+
+describe('categoryReturns', () => {
+  const points: HistoryPoint[] = [
+    { date: '2026-01-05', totalBRL: 1000 },
+    { date: '2026-01-12', totalBRL: 1100 },
+  ]
+
+  it('com menos histórico que a janela, as três dão o mesmo número', () => {
+    const result = categoryReturns(points, [trade({ date: '2026-01-05', quantity: 1000, unitPrice: 1 })])
+    expect(result.total).not.toBeNull()
+    expect(result.fiveYears).toBe(result.total)
+    expect(result.twelveMonths).toBe(result.total)
+  })
+
+  it('desconta o aporte: dinheiro novo não é rendimento', () => {
+    // 1000 → 1100 com 100 aportados na fatia: render 0, não 10%.
+    const result = categoryReturns(points, [
+      trade({ date: '2026-01-05', quantity: 1000, unitPrice: 1 }),
+      trade({ date: '2026-01-08', quantity: 100, unitPrice: 1 }),
+    ])
+    expect(result.total).toBeCloseTo(0, 6)
+  })
+
+  it('o provento entra como rendimento', () => {
+    const result = categoryReturns(points, [
+      trade({ date: '2026-01-05', quantity: 1000, unitPrice: 1 }),
+      trade({ date: '2026-01-08', kind: 'dividend', quantity: 10, unitPrice: 1 }),
+    ])
+    expect(result.total).toBeGreaterThan(0.1)
+  })
+
+  it('sem série, devolve null', () => {
+    expect(categoryReturns([], []).total).toBeNull()
+  })
+})
+
+describe('tradesByCategory', () => {
+  it('contrato de renda fixa vence o cadastro de ativos', () => {
+    const grouped = tradesByCategory(
+      [{ symbol: 'AAA', name: '', assetClass: 'br_stock', currency: 'BRL', broker: '', objective: 'growth' }],
+      [{ symbol: 'RF-1', objective: 'liquidity' } as never],
+      [trade({ symbol: 'AAA' }), trade({ symbol: 'RF-1' }), trade({ symbol: 'ZZZ' })],
+    )
+    expect(grouped.byClass.get('br_stock')).toHaveLength(1)
+    expect(grouped.byClass.get('fixed_income')).toHaveLength(1)
+    expect(grouped.byObjective.get('growth')).toHaveLength(1)
+    expect(grouped.byObjective.get('liquidity')).toHaveLength(1)
   })
 })
