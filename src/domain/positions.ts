@@ -81,6 +81,7 @@ export function buildPositions(input: PortfolioInput): Position[] {
       name: asset?.name ?? contract?.name ?? symbol,
       assetClass,
       objective: asset?.objective ?? contract?.objective ?? '',
+      exchange: asset?.exchange ?? '',
       currency,
       quantity: basis.quantity,
       avgPriceNative: basis.avgPriceNative,

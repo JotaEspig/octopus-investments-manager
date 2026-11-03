@@ -3,6 +3,7 @@ import type {
   Asset,
   AssetClass,
   Currency,
+  Exchange,
   FixedIncomeContract,
   FixedIncomeIndexer,
   Objective,
@@ -116,6 +117,8 @@ function toAsset(row: Row): Asset | null {
     broker: text(row, indexOf(ASSETS_SHEET, 'broker')),
     // '' em ativo cadastrado antes desta coluna existir — nunca um objetivo.
     objective: text(row, indexOf(ASSETS_SHEET, 'objective')) as Objective | '',
+    // '' em ativo cadastrado antes da v9 — `quoteFormula` cai para a moeda.
+    exchange: text(row, indexOf(ASSETS_SHEET, 'exchange')) as Exchange | '',
   }
 }
 
@@ -435,15 +438,22 @@ export async function appendTrade(context: SheetsContext, input: TradeInput): Pr
  * mostra `#N/A` e você VÊ o problema. As abas de apresentação já tratam o erro
  * como zero, então o painel não quebra — mas `Cotações` continua denunciando.
  *
- * O prefixo `BVMF:` depende da MOEDA, não da classe: `br_stock`/`br_fii` são
- * sempre BRL, mas ETF pode ser americano (USD) ou listado na B3 (BRL) dentro
- * da mesma classe — então BRL já é o sinal certo de "está na B3" para todas
- * as classes com cotação.
+ * O prefixo vem da BOLSA, não da classe: Ações Exterior mistura ação e ETF
+ * americano (sem prefixo), ETF de Londres (`LON:`) e BDR na B3 (`BVMF:`).
+ * Ativo sem bolsa gravada (anterior à v9) cai para a moeda — BRL era o sinal
+ * de "está na B3", a regra de antes.
+ *
+ * `apps-script/Code.gs` (`tickerFor`) repete esta regra. Mexeu num, mexa no outro.
  */
-export function quoteFormula(symbol: string, currency: Currency): string {
-  const isBrazilian = currency === 'BRL'
-  const ticker = isBrazilian ? `BVMF:${symbol}` : symbol
-  return `=GOOGLEFINANCE("${ticker}";"price")`
+export function quoteFormula(symbol: string, currency: Currency, exchange: Exchange | '' = ''): string {
+  return `=GOOGLEFINANCE("${googleFinanceTicker(symbol, currency, exchange)}";"price")`
+}
+
+export function googleFinanceTicker(symbol: string, currency: Currency, exchange: Exchange | ''): string {
+  const venue = exchange || (currency === 'BRL' ? 'b3' : 'us')
+  if (venue === 'b3') return `BVMF:${symbol}`
+  if (venue === 'lse') return `LON:${symbol}`
+  return symbol
 }
 
 export async function appendAsset(context: SheetsContext, input: AssetInput): Promise<Asset> {
@@ -454,16 +464,17 @@ export async function appendAsset(context: SheetsContext, input: AssetInput): Pr
     input.currency,
     input.broker,
     input.objective,
+    input.exchange,
   ])
   await writeRow(context, QUOTES_SHEET, [
     input.symbol,
     // A única fórmula que este módulo grava de propósito.
-    formula(quoteFormula(input.symbol, input.currency)),
+    formula(quoteFormula(input.symbol, input.currency, input.exchange)),
     input.currency,
   ])
 
   // Ativo novo pode reordenar a aba de classe inteira (o `SORT`/`FILTER` da
-  // coluna A é por símbolo) — sem isto, um ETF cadastrado pelo app ficaria com
+  // coluna A é por símbolo) — sem isto, um ativo do exterior cadastrado pelo app ficaria com
   // `US$`/`R$` errado até o `dailyUpdate` do Apps Script passar por lá.
   if (CLASS_CURRENCY[input.assetClass] === 'mixed') {
     await refreshMixedCurrencyFormat(context, input.assetClass)
@@ -474,14 +485,14 @@ export async function appendAsset(context: SheetsContext, input: AssetInput): Pr
 
 /**
  * Recoloca `US$`/`R$`, célula a célula, nas colunas nativas da aba de
- * apresentação de uma classe com moeda mista (hoje só ETF).
+ * apresentação de uma classe com moeda mista (hoje só Ações Exterior).
  *
  * Existe porque o Google Sheets não deixa o FORMATO de uma célula depender do
  * VALOR de outra — a moeda de cada linha só se sabe depois que o
  * `SORT`/`FILTER` de `Ativos` calcula, então `schema.ts` não tem como
  * formatar por linha de forma estática (por isso usa `'price'`, número puro,
  * nessas colunas — ver `marketColumns`). `apps-script/Code.gs` tem a mesma
- * função (`formatEtfCurrency`), rodando uma vez por dia; esta aqui é o que dá
+ * função (`formatMixedCurrency`), rodando uma vez por dia; esta aqui é o que dá
  * o resultado certo NA HORA em que o ativo é cadastrado pelo app, sem esperar
  * o gatilho. Mexeu num, mexa no outro.
  */

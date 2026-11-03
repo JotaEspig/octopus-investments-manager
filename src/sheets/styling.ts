@@ -54,9 +54,8 @@ const rgb = (hex: string): Rgb => ({
  * o bastante para texto branco por cima passar em contraste.
  */
 const CLASS_COLOR: Record<AssetClass, string> = {
-  us_stock: '#1B4F91', // azul
-  etf: '#0F6E62', // teal
   br_stock: '#B06010', // âmbar
+  intl_stock: '#1B4F91', // azul
   br_fii: '#6A3D9A', // roxo
   fixed_income: '#1F6B3B', // verde
 }

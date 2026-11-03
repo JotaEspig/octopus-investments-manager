@@ -3,16 +3,53 @@
  * do Next quanto pelo servidor MCP, e é o que os testes cobrem.
  */
 
-/** Classes de ativo suportadas. O valor é o que vai gravado na planilha. */
-export const ASSET_CLASSES = ['us_stock', 'etf', 'br_stock', 'br_fii', 'fixed_income'] as const
+/**
+ * Classes de ativo suportadas. O valor é o que vai gravado na planilha.
+ *
+ * A divisão que importa é NACIONAL × INTERNACIONAL, não ação × ETF: um ETF
+ * entra na classe da exposição dele — BOVA11 em `br_stock`, VOO em
+ * `intl_stock`. BDR é negociado na B3, em reais, mas a exposição é de fora:
+ * entra em `intl_stock` com a bolsa `b3`. FII continua com classe própria.
+ */
+export const ASSET_CLASSES = ['br_stock', 'intl_stock', 'br_fii', 'fixed_income'] as const
 export type AssetClass = (typeof ASSET_CLASSES)[number]
 
 export const ASSET_CLASS_LABELS: Record<AssetClass, string> = {
-  us_stock: 'Ações EUA',
-  etf: 'ETFs',
   br_stock: 'Ações BR',
+  intl_stock: 'Ações Exterior',
   br_fii: 'FIIs',
   fixed_income: 'Renda Fixa',
+}
+
+/**
+ * Bolsa onde o ativo é negociado. Define o prefixo do GOOGLEFINANCE e, junto
+ * da classe, a moeda: `us` e `lse` são cotados em dólar, `b3` em reais.
+ *
+ * Só `intl_stock` oferece escolha (padrão `us`); `br_stock` e `br_fii` são
+ * sempre `b3`. `''` é ativo cadastrado antes da coluna existir — quem lê cai
+ * para a moeda (BRL → B3), que era a regra anterior.
+ */
+export const EXCHANGES = ['us', 'lse', 'b3'] as const
+export type Exchange = (typeof EXCHANGES)[number]
+
+export const EXCHANGE_LABELS: Record<Exchange, string> = {
+  us: 'EUA (NYSE/NASDAQ)',
+  lse: 'Londres (LSE)',
+  b3: 'B3 (BDR)',
+}
+
+/** Bolsas que cada classe aceita — a primeira é o padrão. */
+export const CLASS_EXCHANGES: Record<Exclude<AssetClass, 'fixed_income'>, readonly Exchange[]> = {
+  br_stock: ['b3'],
+  intl_stock: ['us', 'lse', 'b3'],
+  br_fii: ['b3'],
+}
+
+/** Moeda de cotação de cada bolsa. LSE só em dólar: o projeto não tem GBP/EUR. */
+export const EXCHANGE_CURRENCY: Record<Exchange, 'BRL' | 'USD'> = {
+  us: 'USD',
+  lse: 'USD',
+  b3: 'BRL',
 }
 
 export const CURRENCIES = ['BRL', 'USD'] as const
@@ -107,6 +144,8 @@ export interface Asset {
   broker: string
   /** `''` em ativos cadastrados antes desta coluna existir. */
   objective: Objective | ''
+  /** `''` em ativos cadastrados antes desta coluna existir — ver `EXCHANGES`. */
+  exchange: Exchange | ''
 }
 
 /** Contrato de renda fixa. Não tem cotação — é marcado na curva. */
@@ -178,6 +217,8 @@ export interface Position {
   assetClass: AssetClass
   /** `''` quando o ativo/contrato ainda não foi classificado por objetivo. */
   objective: Objective | ''
+  /** Bolsa de negociação; `''` em renda fixa e em ativo anterior à v9. */
+  exchange: Exchange | ''
   currency: Currency
   quantity: number
   /** Preço médio na moeda do ativo (regra da RFB: venda não o altera). */

@@ -518,7 +518,246 @@ export const MIGRATIONS: Migration[] = [
     touchesData: false,
     apply: async () => ['Nada a transformar — o instalador acrescenta cabeçalhos e a lista suspensa'],
   },
+  {
+    to: 9,
+    title: 'Classes nacional × exterior, com bolsa no cadastro',
+    description:
+      'Troca "Ações EUA" e "ETFs" por "Ações BR" (ação e ETF da B3) e "Ações Exterior" (ação, ' +
+      'ETF e BDR). Em `Ativos`: a coluna Classe é reescrita (`us_stock` → `intl_stock`; `etf` ' +
+      'em dólar → `intl_stock`, `etf` em real → `br_stock`) e a coluna nova "Bolsa" entra no ' +
+      'fim, preenchida pela moeda (USD → EUA, BRL → B3). Em `Histórico`: a coluna "ETFs" sai ' +
+      'e as de classe passam a ser "Ações BR" e "Ações Exterior", com os valores antigos ' +
+      'APAGADOS — a coluna "ETFs" misturava as duas coisas e não dá para dividi-la. Patrimônio ' +
+      'total, FIIs, Renda Fixa e objetivos ficam intactos. Depois de migrar, rode no menu da ' +
+      'planilha `Carteira → Reconstruir histórico por classe`. Em `Config`: `target_etf` e ' +
+      '`target_us_stock` saem, `target_br_stock` e o novo `target_intl_stock` ficam em 0 — ' +
+      'ajuste as metas à mão. As abas "Ações EUA" e "ETFs" são apagadas (são derivadas; o ' +
+      'instalador cria "Ações Exterior"). Faz backup antes. ATENÇÃO: na mesma sessão, rode ' +
+      '`sheet:install` e cole o `apps-script/Code.gs` novo no editor da planilha — o script ' +
+      'antigo gravaria o snapshot da semana com as colunas de classe da v8, desalinhadas.',
+    touchesData: true,
+    apply: async (ctx) => [
+      ...(await reclassifyAssetsV9(ctx)),
+      ...(await reshapeHistoryV9(ctx)),
+      ...(await retargetConfigV9(ctx)),
+      ...(await dropOldClassViewsV9(ctx)),
+    ],
+  },
 ]
+
+// ---------------------------------------------------------------------------
+// v9 — etapas
+//
+// Cada etapa confere o estado antes de agir, para que rodar de novo depois de
+// uma falha no meio não aplique duas vezes o que já passou (apagar a coluna
+// "ETFs" duas vezes levaria junto a coluna vizinha).
+// ---------------------------------------------------------------------------
+
+/** Classe e bolsa novas de um ativo, a partir da classe e moeda gravadas na v8. */
+export function reclassifyV9(
+  assetClass: string,
+  currency: string,
+): { assetClass: string; exchange: string } {
+  const exchange = currency === 'BRL' ? 'b3' : 'us'
+  switch (assetClass) {
+    case 'us_stock':
+      // BRL numa ação "EUA" só pode ser BDR — exterior negociado na B3.
+      return { assetClass: 'intl_stock', exchange }
+    case 'etf':
+      return { assetClass: currency === 'BRL' ? 'br_stock' : 'intl_stock', exchange }
+    case 'br_stock':
+    case 'br_fii':
+      return { assetClass, exchange: 'b3' }
+    default:
+      return { assetClass, exchange }
+  }
+}
+
+async function reclassifyAssetsV9(ctx: MigrationContext): Promise<string[]> {
+  const { api, spreadsheetId } = ctx.sheets
+  const range = ref(SHEET.assets, 'A2:G')
+  const rows =
+    (
+      await api.spreadsheets.values.get({
+        spreadsheetId,
+        range,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+    ).data.values ?? []
+
+  const classes: string[][] = []
+  const exchanges: string[][] = []
+  const moved: Record<string, number> = {}
+  for (const row of rows) {
+    const symbol = String(row[0] ?? '').trim()
+    const oldClass = String(row[2] ?? '').trim()
+    const currency = String(row[3] ?? '').trim()
+    const storedExchange = String(row[6] ?? '').trim()
+    if (!symbol) {
+      classes.push([oldClass])
+      exchanges.push([storedExchange])
+      continue
+    }
+    const next = reclassifyV9(oldClass, currency)
+    classes.push([next.assetClass])
+    // Bolsa já gravada (rodada anterior interrompida) é mantida.
+    exchanges.push([storedExchange || next.exchange])
+    if (next.assetClass !== oldClass) {
+      const key = `${oldClass} → ${next.assetClass}`
+      moved[key] = (moved[key] ?? 0) + 1
+    }
+  }
+
+  await api.spreadsheets.values.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      valueInputOption: 'RAW',
+      data: [
+        { range: ref(SHEET.assets, 'G1'), values: [['Bolsa']] },
+        ...(rows.length > 0
+          ? [
+              { range: ref(SHEET.assets, `C2:C${rows.length + 1}`), values: classes },
+              { range: ref(SHEET.assets, `G2:G${rows.length + 1}`), values: exchanges },
+            ]
+          : []),
+      ],
+    },
+  })
+
+  const summary = Object.entries(moved).map(([key, count]) => `${key}: ${count}`)
+  return [
+    `Ativos: ${rows.length} linha(s) conferida(s), coluna Bolsa preenchida` +
+      (summary.length > 0 ? ` — ${summary.join(', ')}` : ''),
+  ]
+}
+
+async function reshapeHistoryV9(ctx: MigrationContext): Promise<string[]> {
+  const { api, spreadsheetId } = ctx.sheets
+  const header =
+    (await api.spreadsheets.values.get({ spreadsheetId, range: ref(SHEET.history, 'A1:G1') })).data
+      .values?.[0] ?? []
+  const actions: string[] = []
+
+  // Layout da v8: Data, Patrimônio, Ações EUA, ETFs, Ações BR, FIIs, Renda Fixa…
+  if (String(header[3] ?? '').trim() === 'ETFs') {
+    await deleteColumn(ctx, SHEET.history, 3)
+    actions.push('Histórico: coluna "ETFs" removida')
+  }
+
+  await api.spreadsheets.values.update({
+    spreadsheetId,
+    range: ref(SHEET.history, 'C1:D1'),
+    valueInputOption: 'RAW',
+    requestBody: { values: [['Ações BR', 'Ações Exterior']] },
+  })
+  await api.spreadsheets.values.clear({
+    spreadsheetId,
+    range: ref(SHEET.history, 'C2:D'),
+    requestBody: {},
+  })
+  actions.push(
+    'Histórico: colunas "Ações BR" e "Ações Exterior" zeradas — rode ' +
+      '"Carteira → Reconstruir histórico por classe" na planilha',
+  )
+  return actions
+}
+
+async function retargetConfigV9(ctx: MigrationContext): Promise<string[]> {
+  const { api, spreadsheetId } = ctx.sheets
+  const keys = (
+    (await api.spreadsheets.values.get({ spreadsheetId, range: ref(SHEET.config, 'A2:A') })).data
+      .values ?? []
+  ).map((row) => String(row[0] ?? '').trim())
+
+  const rowOf = (key: string) => {
+    const index = keys.indexOf(key)
+    return index < 0 ? null : index + 2
+  }
+
+  const actions: string[] = []
+  const updates: Array<{ range: string; values: unknown[][] }> = []
+
+  const brRow = rowOf('target_br_stock')
+  if (brRow !== null) {
+    updates.push({
+      range: ref(SHEET.config, `B${brRow}:C${brRow}`),
+      values: [[0, 'Meta de alocação — Ações BR (inclui ETF da B3).']],
+    })
+  }
+
+  // A chave nova reaproveita a linha de `target_etf` quando ela existe: assim
+  // não sobra buraco no meio de `Config` (o instalador acrescenta chave nova
+  // contando as linhas preenchidas).
+  const intlRow = rowOf('target_intl_stock') ?? rowOf('target_etf')
+  const intlValues = [['target_intl_stock', 0, 'Meta de alocação — Ações Exterior (inclui ETF e BDR).']]
+  if (intlRow !== null) {
+    updates.push({ range: ref(SHEET.config, `A${intlRow}:C${intlRow}`), values: intlValues })
+  } else {
+    const next = keys.length + 2
+    updates.push({ range: ref(SHEET.config, `A${next}:C${next}`), values: intlValues })
+  }
+
+  if (updates.length > 0) {
+    await api.spreadsheets.values.batchUpdate({
+      spreadsheetId,
+      requestBody: { valueInputOption: 'RAW', data: updates as never },
+    })
+  }
+  actions.push('Config: target_br_stock e target_intl_stock em 0 — ajuste as metas')
+
+  // A linha de `target_us_stock` sai de vez (linha inteira, sem deixar buraco).
+  // Isso mantém `privacy_mode` na linha que `CONFIG_PRIVACY_ROW` calcula: o
+  // schema também passou de cinco metas de classe para quatro.
+  const usRow = rowOf('target_us_stock')
+  const configId = ctx.sheetId(SHEET.config)
+  if (usRow !== null && configId !== null) {
+    await ctx.batch([
+      {
+        deleteDimension: {
+          range: { sheetId: configId, dimension: 'ROWS', startIndex: usRow - 1, endIndex: usRow },
+        },
+      },
+    ])
+    actions.push('Config: target_us_stock removida')
+  }
+  return actions
+}
+
+async function dropOldClassViewsV9(ctx: MigrationContext): Promise<string[]> {
+  const { api, spreadsheetId } = ctx.sheets
+  const meta = (await api.spreadsheets.get({ spreadsheetId, includeGridData: false })).data
+  // `*_US_ETF` sobraram órfãos da v7, que renomeou a classe sem apagá-los.
+  const oldNames = new Set([
+    'TOTAL_US_STOCK',
+    'TOTAL_ETF',
+    'TOTAL_US_ETF',
+    'RETORNO_US_STOCK',
+    'RETORNO_ETF',
+    'RETORNO_US_ETF',
+  ])
+
+  const requests: sheets_v4.Schema$Request[] = []
+  for (const named of meta.namedRanges ?? []) {
+    if (named.name && oldNames.has(named.name) && named.namedRangeId) {
+      requests.push({ deleteNamedRange: { namedRangeId: named.namedRangeId } })
+    }
+  }
+  const dropped: string[] = []
+  for (const title of ['Ações EUA', 'ETFs']) {
+    const id = (meta.sheets ?? []).find((sheet) => sheet.properties?.title === title)?.properties
+      ?.sheetId
+    if (typeof id === 'number') {
+      requests.push({ deleteSheet: { sheetId: id } })
+      dropped.push(title)
+    }
+  }
+  if (requests.length > 0) await ctx.batch(requests)
+  return [
+    dropped.length > 0
+      ? `Abas de apresentação apagadas: ${dropped.join(', ')}`
+      : 'Abas antigas de classe já não existiam',
+  ]
+}
 
 /**
  * O que falta rodar para sair de `from` e chegar na versão que o código conhece.
