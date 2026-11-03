@@ -1,7 +1,12 @@
 import { z } from 'zod'
 import {
   ASSET_CLASSES,
+  CLASS_EXCHANGES,
   CURRENCIES,
+  EXCHANGE_CURRENCY,
+  EXCHANGE_LABELS,
+  EXCHANGES,
+  type Exchange,
   FIXED_INCOME_INDEXERS,
   OBJECTIVES,
   TRADE_KINDS,
@@ -72,22 +77,57 @@ export type TradeInput = z.infer<typeof tradeInputSchema>
  *
  * A regra vale nos dois lados: o que o formulário exige, a rota também exige.
  */
-export const assetInputSchema = z.object({
-  symbol,
-  name: z.string().trim().min(1, 'Informe o nome do ativo').max(120),
-  assetClass: z.enum(ASSET_CLASSES, { message: 'Escolha a classe do ativo' }),
-  currency: z.enum(CURRENCIES),
-  // A mensagem no construtor cobre também o campo AUSENTE; sozinho, o `min`
-  // só pega o campo vazio e deixa vazar o texto padrão em inglês do zod.
-  broker: z.string({ message: 'Informe a corretora' }).trim().min(1, 'Informe a corretora').max(60),
-  /**
-   * Segunda classificação, independente da classe. Obrigatória no cadastro —
-   * mesmo quando o valor é sugerido automaticamente (CDI/FII/IPCA/prefixado),
-   * o campo continua editável, e sugestão não confirmada não deveria passar
-   * batido.
-   */
-  objective: z.enum(OBJECTIVES, { message: 'Escolha o objetivo do ativo' }),
-})
+export const assetInputSchema = z
+  .object({
+    symbol,
+    name: z.string().trim().min(1, 'Informe o nome do ativo').max(120),
+    assetClass: z.enum(ASSET_CLASSES, { message: 'Escolha a classe do ativo' }),
+    currency: z.enum(CURRENCIES),
+    // A mensagem no construtor cobre também o campo AUSENTE; sozinho, o `min`
+    // só pega o campo vazio e deixa vazar o texto padrão em inglês do zod.
+    broker: z.string({ message: 'Informe a corretora' }).trim().min(1, 'Informe a corretora').max(60),
+    /**
+     * Segunda classificação, independente da classe. Obrigatória no cadastro —
+     * mesmo quando o valor é sugerido automaticamente (CDI/FII/IPCA/prefixado),
+     * o campo continua editável, e sugestão não confirmada não deveria passar
+     * batido.
+     */
+    objective: z.enum(OBJECTIVES, { message: 'Escolha o objetivo do ativo' }),
+    /**
+     * Bolsa de negociação. Opcional na entrada: ausente, vale o padrão da
+     * classe (`us` para Ações Exterior, `b3` para as brasileiras).
+     */
+    exchange: z.enum(EXCHANGES).optional(),
+  })
+  .transform((asset) => ({
+    ...asset,
+    exchange: (asset.exchange ?? defaultExchange(asset.assetClass)) as Exchange | '',
+  }))
+  .superRefine((asset, context) => {
+    if (asset.assetClass === 'fixed_income' || asset.exchange === '') return
+    const allowed = CLASS_EXCHANGES[asset.assetClass]
+    if (!allowed.includes(asset.exchange)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['exchange'],
+        message: `Bolsa ${EXCHANGE_LABELS[asset.exchange]} não vale para esta classe`,
+      })
+      return
+    }
+    // A moeda acompanha a bolsa: dólar em EUA/LSE, real na B3 (inclusive BDR).
+    if (asset.currency !== EXCHANGE_CURRENCY[asset.exchange]) {
+      context.addIssue({
+        code: 'custom',
+        path: ['currency'],
+        message: `Ativo na bolsa ${EXCHANGE_LABELS[asset.exchange]} é cotado em ${EXCHANGE_CURRENCY[asset.exchange]}`,
+      })
+    }
+  })
+
+/** Bolsa padrão da classe; `''` para renda fixa, que não tem bolsa. */
+export function defaultExchange(assetClass: (typeof ASSET_CLASSES)[number]): Exchange | '' {
+  return assetClass === 'fixed_income' ? '' : CLASS_EXCHANGES[assetClass][0]!
+}
 
 export type AssetInput = z.infer<typeof assetInputSchema>
 

@@ -39,7 +39,7 @@ flowchart TB
     bcb["🏛️ Banco Central<br/>CDI · PTAX"]
 
     subgraph sheets["📊 Google Sheets"]
-        views["APRESENTAÇÃO — só fórmulas<br/>Painel · Ações EUA · ETFs<br/>Ações BR · FIIs · Renda Fixa"]
+        views["APRESENTAÇÃO — só fórmulas<br/>Painel · Ações BR · Ações Exterior<br/>FIIs · Renda Fixa"]
         data["DADOS — escrita programática<br/>Operações · Ativos · Contratos RF<br/>Cotações · CDI · Histórico · Config"]
         views -->|lê| data
     end

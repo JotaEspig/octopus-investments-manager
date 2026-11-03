@@ -105,7 +105,11 @@ server.registerTool(
       assetClass: z
         .enum(ASSET_CLASSES)
         .optional()
-        .describe('Filtra por classe. Sem isto, devolve a carteira inteira.'),
+        .describe(
+          'Filtra por classe. A divisão é nacional × exterior: `br_stock` (ação e ETF da B3), ' +
+            '`intl_stock` (ação, ETF e BDR com exposição de fora), `br_fii`, `fixed_income`. ' +
+            'Sem isto, devolve a carteira inteira.',
+        ),
     },
   },
   async ({ assetClass }) => {
