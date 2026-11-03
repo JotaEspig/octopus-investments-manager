@@ -54,9 +54,6 @@ const PRIVACY_MODE_KEY = 'privacy_mode'
 const DASHBOARD_PRIVACY_ROW = 1
 const DASHBOARD_PRIVACY_COL = 8 // H — privacyCheckboxColumn (0-based 7) + 1
 
-/** Título do gráfico de patrimônio. Igual a HISTORY_CHART_TITLE em schema.ts. */
-const HISTORY_CHART_TITLE = 'Patrimônio — últimos meses'
-
 const CLASS_TOTAL_RANGES = [
   'TOTAL_BR_STOCK',
   'TOTAL_INTL_STOCK',
@@ -133,7 +130,8 @@ function onEdit(e) {
 
   const hidden = range.getValue() === true
   writeConfigValue(PRIVACY_MODE_KEY, hidden)
-  togglePatrimonyChartAxis(hidden)
+  // O gráfico do Painel mostra rentabilidade em %, não patrimônio em R$ —
+  // não revela valor absoluto, então o modo privacidade não mexe mais nele.
 }
 
 /** Grava um valor por chave em `Config`, sem mexer nas outras linhas. */
@@ -145,28 +143,6 @@ function writeConfigValue(key, value) {
       sheet.getRange(i + 2, 2).setValue(value)
       return
     }
-  }
-}
-
-/**
- * Esconde/mostra os rótulos numéricos do eixo Y do gráfico de patrimônio.
- *
- * A tabela mascarada não adianta nada se o gráfico ao lado mostra a mesma
- * informação pela altura da linha com o eixo rotulado — por isso o modo
- * privacidade também mexe aqui, não só nas células.
- */
-function togglePatrimonyChartAxis(hidden) {
-  const sheet = sheetByName(SHEETS.dashboard)
-  const charts = sheet.getCharts()
-  for (let i = 0; i < charts.length; i += 1) {
-    const chart = charts[i]
-    if (chart.getOptions().get('title') !== HISTORY_CHART_TITLE) continue
-    const updated = chart
-      .modify()
-      .setOption('vAxis.textPosition', hidden ? 'none' : 'out')
-      .build()
-    sheet.updateChart(updated)
-    return
   }
 }
 

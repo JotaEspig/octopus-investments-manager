@@ -13,12 +13,14 @@ import {
   DASHBOARD_OBJECTIVE_HEADERS,
   DASHBOARD_TABLE_COLUMNS,
   DATA_SHEETS,
+  frozenRowsOf,
   DIALECT_PROBE,
   DIALECT_PROBE_EXPECTED,
   DASHBOARD_PERFORMANCE_HEADERS,
   EVOLUTION_CHART_ROWS,
   EVOLUTION_DATA_HEADERS,
   HISTORY_CHART_TITLE,
+  LEGACY_HISTORY_CHART_TITLES,
   NAMED_RANGE,
   SCHEMA_VERSION,
   SHEET,
@@ -28,6 +30,7 @@ import {
   VIEW_ROWS,
   VIEW_SHEETS,
   dashboardAssetsFormula,
+  evolutionHeaderFormulas,
   evolutionSeriesFormula,
   localizeValue,
   objectiveTotalFormula,
@@ -280,14 +283,14 @@ function dashboardContent(): ValueRange[] {
       ),
       values: performanceRowFormulas(),
     },
-    // A série que o gráfico desenha: cabeçalho (a legenda) e uma fórmula que
-    // derrama as três colunas para baixo.
+    // A série que o gráfico desenha: cabeçalho (a legenda, com o valor final)
+    // e uma fórmula que derrama as três colunas para baixo.
     {
       range: ref(
         DASHBOARD.title,
         `${evolutionColumn}${DASHBOARD.evolutionDataRow}:${evolutionLastColumn}${DASHBOARD.evolutionDataRow}`,
       ),
-      values: [EVOLUTION_DATA_HEADERS],
+      values: [evolutionHeaderFormulas()],
     },
     {
       range: ref(DASHBOARD.title, `${evolutionColumn}${DASHBOARD.evolutionDataRow + 1}`),
@@ -300,8 +303,13 @@ function dashboardContent(): ValueRange[] {
 // Gráficos
 // ---------------------------------------------------------------------------
 
-/** Linha "mesmo dinheiro no CDI" — cinza claro (#BDBDBD). */
-const CDI_LINE_COLOR = { red: 0.74, green: 0.74, blue: 0.74 }
+/**
+ * Carteira em laranja forte e grossa; CDI em cinza fino. A carteira é a linha
+ * que o olho segue, o CDI é a régua — o contraste de cor E de espessura é o
+ * que deixa a distância entre as duas legível de longe.
+ */
+const PORTFOLIO_LINE_COLOR = { red: 0.96, green: 0.36, blue: 0.13 } // #F55C21
+const CDI_LINE_COLOR = { red: 0.62, green: 0.62, blue: 0.62 } // #9E9E9E
 
 export interface ChartDefinition {
   title: string
@@ -360,26 +368,35 @@ function chartDefinitions(dashboardId: number): ChartDefinition[] {
       anchorRow: DASHBOARD.historyChartRow,
       spec: {
         title: HISTORY_CHART_TITLE,
+        subtitle: 'Rentabilidade acumulada — últimos 12 meses (ou desde o primeiro aporte)',
         basicChart: {
           chartType: 'LINE',
-          legendPosition: 'BOTTOM_LEGEND',
+          // Em cima, como nas corretoras: a legenda traz o valor final de
+          // cada linha (`evolutionHeaderFormulas`), é a primeira coisa a ler.
+          legendPosition: 'TOP_LEGEND',
           headerCount: 1,
-          axis: [
-            { position: 'BOTTOM_AXIS', title: 'Semana' },
-            { position: 'LEFT_AXIS', title: 'R$' },
-          ],
-          // Lê a série da janela de 12 meses que o próprio Painel monta
-          // (`evolutionSeriesFormula`), não o Histórico cru: é ali que a
-          // janela é cortada e a linha do CDI é calculada.
+          // Sem título nos eixos: data embaixo e % do lado se explicam
+          // sozinhos, e o espaço vai para a curva. Os percentuais vêm do
+          // formato da célula. O eixo Y se ajusta à faixa dos dados (não
+          // parte de R$ 0 como o gráfico de patrimônio), que é o que tira a
+          // área morta e deixa ver a inclinação.
+          axis: [{ position: 'BOTTOM_AXIS' }, { position: 'LEFT_AXIS' }],
+          // Lê a série que o próprio Painel monta (`evolutionSeriesFormula`),
+          // não o Histórico cru: é ali que a janela é cortada e as duas
+          // rentabilidades são acumuladas.
           domains: [{ domain: { sourceRange: { sources: [evolution(0)] } } }],
           series: [
-            { series: { sourceRange: { sources: [evolution(1)] } }, targetAxis: 'LEFT_AXIS' },
             {
-              // Secundária de propósito: cinza claro, para a carteira continuar
-              // sendo a linha que o olho segue e o CDI ser só a régua.
+              series: { sourceRange: { sources: [evolution(1)] } },
+              targetAxis: 'LEFT_AXIS',
+              colorStyle: { rgbColor: PORTFOLIO_LINE_COLOR },
+              lineStyle: { width: 3 },
+            },
+            {
               series: { sourceRange: { sources: [evolution(2)] } },
               targetAxis: 'LEFT_AXIS',
               colorStyle: { rgbColor: CDI_LINE_COLOR },
+              lineStyle: { width: 2 },
             },
           ],
         },
@@ -491,7 +508,7 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
         properties: {
           title,
           index,
-          gridProperties: { frozenRowCount: title === DASHBOARD.title ? 1 : 2 },
+          gridProperties: { frozenRowCount: frozenRowsOf(title) },
         },
       },
     })
@@ -817,6 +834,20 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
         heightPixels: CHART_HEIGHT_PIXELS,
       }
       const existing = dashboardCharts.find((chart) => chart.spec?.title === definition.title)
+
+      // Gráfico de uma versão anterior, com outro título: apaga e deixa criar
+      // o novo do zero. Só atualizar a spec herdaria opções que a API não
+      // expõe (o Apps Script escondia o eixo Y do gráfico de patrimônio no
+      // modo privacidade) — e o gráfico velho ficaria duplicado ao lado.
+      if (definition.title === HISTORY_CHART_TITLE) {
+        for (const legacy of dashboardCharts) {
+          const title = legacy.spec?.title ?? ''
+          if (legacy.chartId != null && LEGACY_HISTORY_CHART_TITLES.includes(title)) {
+            structureRequests.push({ deleteEmbeddedObject: { objectId: legacy.chartId } })
+            actions.push(`Gráfico antigo substituído: ${title}`)
+          }
+        }
+      }
 
       if (existing?.chartId != null) {
         structureRequests.push({

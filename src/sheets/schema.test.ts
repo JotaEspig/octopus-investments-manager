@@ -4,6 +4,9 @@ import {
   CHART_OFFSET_X_PIXELS,
   CHART_WIDTH_PIXELS,
   DASHBOARD,
+  DATA_SHEETS,
+  SHEET,
+  frozenRowsOf,
   DASHBOARD_ALLOCATION_HEADERS,
   DASHBOARD_ASSETS_HEADERS,
   DASHBOARD_OBJECTIVE_HEADERS,
@@ -348,5 +351,16 @@ describe('histórico por objetivo', () => {
     const names = OBJECTIVES.map(objectiveTotalRangeName)
     expect(new Set(names).size).toBe(OBJECTIVES.length)
     expect(names[0]).toBe('TOTAL_GOAL_LIQUIDITY')
+  })
+})
+
+describe('frozenRowsOf', () => {
+  it('abas de dados fixam só o cabeçalho, na linha 1', () => {
+    for (const spec of DATA_SHEETS) expect(frozenRowsOf(spec.title), spec.title).toBe(1)
+  })
+
+  it('abas de classe fixam título e cabeçalho; o Painel, só o título', () => {
+    for (const spec of VIEW_SHEETS) expect(frozenRowsOf(spec.title), spec.title).toBe(2)
+    expect(frozenRowsOf(SHEET.dashboard)).toBe(1)
   })
 })
