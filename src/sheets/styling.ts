@@ -909,10 +909,11 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
     )
     requests.push({
       repeatCell: {
+        // Valor na moeda do ativo, já como texto com o símbolo — ver
+        // `dashboardAssetsFormula`. O formato de número volta ao padrão para
+        // não sobrar o "R$" de quando a coluna era numérica.
         range: grid(dashboardId, DASHBOARD.assetsFirstRow - 1, assetsLast, 1, 2),
-        cell: {
-          userEnteredFormat: { numberFormat: NUMBER_FORMAT.brl!, horizontalAlignment: 'RIGHT' },
-        },
+        cell: { userEnteredFormat: { horizontalAlignment: 'RIGHT' } },
         fields: 'userEnteredFormat(numberFormat,horizontalAlignment)',
       },
     })
