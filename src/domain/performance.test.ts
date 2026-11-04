@@ -6,6 +6,7 @@ import {
   cdiBenchmarkSeries,
   cdiFactor,
   contributionsBetween,
+  cumulativeReturnSeries,
   netContributionBRL,
   performanceOverview,
   performanceWindow,
@@ -232,5 +233,55 @@ describe('tradesByCategory', () => {
     expect(grouped.byClass.get('fixed_income')).toHaveLength(1)
     expect(grouped.byObjective.get('growth')).toHaveLength(1)
     expect(grouped.byObjective.get('liquidity')).toHaveLength(1)
+  })
+})
+
+describe('cumulativeReturnSeries', () => {
+  it('termina exatamente nos números do quadro — histórico curto, desde o primeiro aporte', () => {
+    const history: HistoryPoint[] = [
+      { date: '2026-01-31', totalBRL: 1050 },
+      { date: '2026-02-28', totalBRL: 1102.5 },
+    ]
+    const trades = [trade({ date: '2026-01-10', quantity: 10 })]
+    const series = cumulativeReturnSeries(history, trades, cdi)
+    const overview = performanceOverview(history, trades, cdi)!
+
+    // Um ponto a mais, em zero, no primeiro aporte.
+    expect(series[0]).toEqual({ date: '2026-01-10', portfolio: 0, cdi: 0 })
+    expect(series).toHaveLength(3)
+    expect(series.at(-1)!.portfolio).toBeCloseTo(overview.total.portfolioReturn!, 12)
+    expect(series.at(-1)!.cdi).toBeCloseTo(overview.total.cdiReturn, 12)
+  })
+
+  it('o aporte não vira rendimento — só o desempenho aparece', () => {
+    // 1000 → +1000 de aporte → 2100: a fatia rendeu 5%, não 110%.
+    const history: HistoryPoint[] = [
+      { date: '2026-01-31', totalBRL: 1000 },
+      { date: '2026-02-28', totalBRL: 2100 },
+    ]
+    const trades = [
+      trade({ date: '2026-01-31', quantity: 10 }),
+      trade({ date: '2026-02-10', quantity: 10 }),
+    ]
+    const series = cumulativeReturnSeries(history, trades, [])
+    expect(series.map((point) => point.portfolio)).toEqual([0, 0, expect.closeTo(0.05, 12)])
+  })
+
+  it('com mais de 12 meses, começa em zero no primeiro ponto da janela', () => {
+    const history: HistoryPoint[] = [
+      { date: '2024-01-01', totalBRL: 1000 },
+      { date: '2025-01-01', totalBRL: 1100 },
+      { date: '2026-01-01', totalBRL: 1210 },
+    ]
+    const trades = [trade({ date: '2024-01-01', quantity: 10 })]
+    const series = cumulativeReturnSeries(history, trades, [])
+    const overview = performanceOverview(history, trades, [])!
+    expect(series.map((point) => point.date)).toEqual(['2025-01-01', '2026-01-01'])
+    expect(series[0]!.portfolio).toBe(0)
+    expect(series.at(-1)!.portfolio).toBeCloseTo(overview.lastMonths.portfolioReturn!, 12)
+  })
+
+  it('sem histórico, sem série', () => {
+    expect(cumulativeReturnSeries([], [], cdi)).toEqual([])
   })
 })

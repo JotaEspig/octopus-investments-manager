@@ -4,6 +4,9 @@ import {
   CHART_OFFSET_X_PIXELS,
   CHART_WIDTH_PIXELS,
   DASHBOARD,
+  DATA_SHEETS,
+  SHEET,
+  frozenRowsOf,
   DASHBOARD_ALLOCATION_HEADERS,
   DASHBOARD_ASSETS_HEADERS,
   DASHBOARD_OBJECTIVE_HEADERS,
@@ -176,8 +179,21 @@ describe('dashboardAssetsFormula', () => {
     }
   })
 
-  it('ordena pela coluna de valor, decrescente', () => {
-    expect(formula).toContain('SORT(FILTER(dados;INDEX(dados;;2)>0);2;FALSE)')
+  it('ordena pelo valor em reais, decrescente, e descarta a coluna da ordem', () => {
+    // A coluna visível de valor é texto na moeda do ativo — ordenar por ela
+    // misturaria dólar com real. A 7ª coluna, oculta, é o valor em reais.
+    expect(formula).toContain('CHOOSECOLS(SORT(FILTER(dados;INDEX(dados;;7)>0);7;FALSE);1;2;3;4;5;6)')
+  })
+
+  it('mostra o valor na moeda do ativo, com o símbolo de cada linha', () => {
+    // O rendimento % ao lado é na moeda do ativo: valor em reais na mesma
+    // linha faria o rendimento em dólar parecer rendimento em reais.
+    const exterior = VIEW_SHEETS.find((spec) => spec.assetClass === 'intl_stock')!
+    const nativeLetter = String.fromCharCode(
+      65 + exterior.columns.findIndex((column) => column.header === 'Valor de mercado'),
+    )
+    expect(formula).toContain(`FIXED(${ref(exterior.title, `$${nativeLetter}$${VIEW_FIRST_ROW}`)}`)
+    expect(formula).toContain('"US$ "')
   })
 
   it('fica equilibrada e sem tokens nos dois dialetos', () => {
@@ -193,8 +209,9 @@ describe('dashboardAssetsFormula', () => {
     // inteira — a tabela some por causa de uma seção vazia. E ele precisa ter
     // exatamente a largura da tabela, senão a pilha fica irregular.
     const separator = FORMULA_TOKEN.arrayColumn
-    const fallback = `{""${separator}0${separator}""${separator}0${separator}""${separator}0}`
-    expect(fallback.split(separator)).toHaveLength(DASHBOARD_ASSETS_HEADERS.length)
+    const fallback = `{""${separator}""${separator}""${separator}0${separator}""${separator}0${separator}0}`
+    // Uma a mais que os cabeçalhos: a coluna oculta do valor em reais.
+    expect(fallback.split(separator)).toHaveLength(DASHBOARD_ASSETS_HEADERS.length + 1)
     expect(formula.split(fallback)).toHaveLength(VIEW_SHEETS.length + 1)
   })
 
@@ -348,5 +365,16 @@ describe('histórico por objetivo', () => {
     const names = OBJECTIVES.map(objectiveTotalRangeName)
     expect(new Set(names).size).toBe(OBJECTIVES.length)
     expect(names[0]).toBe('TOTAL_GOAL_LIQUIDITY')
+  })
+})
+
+describe('frozenRowsOf', () => {
+  it('abas de dados fixam só o cabeçalho, na linha 1', () => {
+    for (const spec of DATA_SHEETS) expect(frozenRowsOf(spec.title), spec.title).toBe(1)
+  })
+
+  it('abas de classe fixam título e cabeçalho; o Painel, só o título', () => {
+    for (const spec of VIEW_SHEETS) expect(frozenRowsOf(spec.title), spec.title).toBe(2)
+    expect(frozenRowsOf(SHEET.dashboard)).toBe(1)
   })
 })
