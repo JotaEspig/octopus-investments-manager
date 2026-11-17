@@ -95,8 +95,9 @@ invente um número**: diga que não é determinável e use o retorno simples,
 declarando a limitação.
 
 ### Contra o CDI: `portfolio_evolution`
-São os mesmos números do Painel da planilha (gráfico de patrimônio e quadro de
-rendimento). Três coisas para não errar:
+São os mesmos números do quadro de rendimento do Painel. O gráfico do Painel
+mostra rentabilidade ACUMULADA em % (carteira × CDI, as duas partindo de zero);
+a `series` daqui é outra conta, em reais. Três coisas para não errar:
 
 - **`portfolioReturn` é rentabilidade ponderada pelo tempo (TWR), não XIRR.**
   TWR mede quanto cada real rendeu, sem deixar o tamanho e o momento dos aportes

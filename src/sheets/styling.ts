@@ -9,6 +9,7 @@ import {
   DASHBOARD_PERFORMANCE_WIDTHS,
   DASHBOARD_TABLE_COLUMNS,
   DATA_SHEETS,
+  frozenRowsOf,
   EVOLUTION_CHART_ROWS,
   EVOLUTION_DATA_HEADERS,
   GAIN_HEADERS,
@@ -58,6 +59,24 @@ const CLASS_COLOR: Record<AssetClass, string> = {
   intl_stock: '#1B4F91', // azul
   br_fii: '#6A3D9A', // roxo
   fixed_income: '#1F6B3B', // verde
+}
+
+/**
+ * Cor de cada classe na PIZZA de alocação: azul o exterior, amarelo as ações
+ * brasileiras, verde a renda fixa — mais vivas que as de `CLASS_COLOR`, que
+ * precisam ser escuras para segurar texto branco nas abas.
+ *
+ * A API não expõe cor por fatia de pizza. O que ela expõe é o TEMA da
+ * planilha, e o gráfico pinta a fatia N com a cor de destaque N do tema
+ * (`ACCENT1`…`ACCENT6`), na ordem das linhas da tabela de alocação — que é a
+ * de `ASSET_CLASSES`. Por isso o mapa é por classe e a ordem sai de lá: trocar
+ * a ordem das classes não desalinha cor e fatia.
+ */
+const PIE_COLOR: Record<AssetClass, string> = {
+  br_stock: '#F2B705', // amarelo
+  intl_stock: '#2F7DE1', // azul
+  br_fii: '#8E63CE', // roxo
+  fixed_income: '#22A35A', // verde
 }
 
 const PALETTE = {
@@ -518,6 +537,31 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
 
   const requests: sheets_v4.Schema$Request[] = []
 
+  // --- Tema: cores de destaque = cores das fatias da pizza ---------------
+  // O tema exige o conjunto inteiro de pares (texto, fundo, link, destaques):
+  // parte do que já está gravado e troca só os destaques das classes.
+  const currentTheme = meta.properties?.spreadsheetTheme
+  if (currentTheme?.themeColors?.length) {
+    const accents = new Map(
+      ASSET_CLASSES.map((assetClass, index) => [`ACCENT${index + 1}`, PIE_COLOR[assetClass]]),
+    )
+    requests.push({
+      updateSpreadsheetProperties: {
+        properties: {
+          spreadsheetTheme: {
+            ...currentTheme,
+            themeColors: currentTheme.themeColors.map((pair) => {
+              const hex = accents.get(pair.colorType ?? '')
+              return hex ? { colorType: pair.colorType, color: { rgbColor: rgb(hex) } } : pair
+            }),
+          },
+        },
+        fields: 'spreadsheetTheme',
+      },
+    })
+    actions.push('Tema: cores da pizza por classe (exterior azul, BR amarelo, renda fixa verde)')
+  }
+
   // --- Abas de dados: cinza, discretas -----------------------------------
   for (const spec of DATA_SHEETS) {
     const sheet = byTitle.get(spec.title)
@@ -865,10 +909,11 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
     )
     requests.push({
       repeatCell: {
+        // Valor na moeda do ativo, já como texto com o símbolo — ver
+        // `dashboardAssetsFormula`. O formato de número volta ao padrão para
+        // não sobrar o "R$" de quando a coluna era numérica.
         range: grid(dashboardId, DASHBOARD.assetsFirstRow - 1, assetsLast, 1, 2),
-        cell: {
-          userEnteredFormat: { numberFormat: NUMBER_FORMAT.brl!, horizontalAlignment: 'RIGHT' },
-        },
+        cell: { userEnteredFormat: { horizontalAlignment: 'RIGHT' } },
         fields: 'userEnteredFormat(numberFormat,horizontalAlignment)',
       },
     })
@@ -1059,9 +1104,9 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
       })
     }
 
-    // Série do gráfico de patrimônio — bastidor, longe da vista, mas com
-    // formato certo (o eixo do gráfico herda o formato da célula) e com a
-    // máscara de privacidade: são valores absolutos.
+    // Série do gráfico de rentabilidade — bastidor, longe da vista, mas com
+    // formato certo: o eixo do gráfico herda o formato da célula. Sem máscara
+    // de privacidade: são percentuais, que o modo privacidade mantém à vista.
     const evolutionStart = DASHBOARD.evolutionDataColumn
     const evolutionFirst = DASHBOARD.evolutionDataRow + 1
     const evolutionLast = DASHBOARD.evolutionDataRow + EVOLUTION_CHART_ROWS
@@ -1078,8 +1123,8 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
     )
     const evolutionFormats: Array<[ColumnFormat, number]> = [
       ['date', 100],
-      ['brl', 130],
-      ['brl', 200],
+      ['percent', 260],
+      ['percent', 130],
     ]
     evolutionFormats.forEach(([format, width], offset) => {
       requests.push({
@@ -1113,33 +1158,23 @@ export async function applyStyling(context: SheetsContext): Promise<StyleReport>
         },
       })
     })
-    requests.push(
-      privacyMaskFlat(
-        grid(
-          dashboardId,
-          evolutionFirst - 1,
-          evolutionLast,
-          evolutionStart + 1,
-          evolutionStart + EVOLUTION_DATA_HEADERS.length,
-        ),
-        PALETTE.bandEven,
-      ),
-    )
-
     actions.push(
       'Painel estilizado: totais em destaque, alocação e rendimento por classe e por objetivo, ' +
         'tabela de ativos e quadro de rendimento × CDI',
     )
   }
 
-  // --- Grade off: com listras e bordas ela vira ruído --------------------
+  // --- Grade off (com listras e bordas ela vira ruído) e linhas fixas ----
   for (const sheet of [...DATA_SHEETS.map((s) => s.title), ...VIEW_SHEETS.map((s) => s.title), DASHBOARD.title]) {
     const sheetId = byTitle.get(sheet)?.properties?.sheetId
     if (sheetId == null) continue
     requests.push({
       updateSheetProperties: {
-        properties: { sheetId, gridProperties: { hideGridlines: true } },
-        fields: 'gridProperties.hideGridlines',
+        properties: {
+          sheetId,
+          gridProperties: { hideGridlines: true, frozenRowCount: frozenRowsOf(sheet) },
+        },
+        fields: 'gridProperties.hideGridlines,gridProperties.frozenRowCount',
       },
     })
   }

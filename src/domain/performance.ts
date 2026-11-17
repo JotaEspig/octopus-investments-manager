@@ -159,6 +159,63 @@ export function timeWeightedReturn(
   return measured ? growth - 1 : null
 }
 
+export interface CumulativeReturnPoint {
+  date: string
+  /** Rentabilidade ponderada pelo tempo acumulada até aqui (0,05 = 5%). */
+  portfolio: number
+  /** CDI acumulado no mesmo período. */
+  cdi: number
+}
+
+/**
+ * A série do gráfico de rentabilidade: carteira e CDI ACUMULADOS em %, os dois
+ * partindo de zero no começo da janela de 12 meses.
+ *
+ * Comparar patrimônio em reais (a série anterior) escondia a diferença: o
+ * aporte domina a curva, as duas linhas sobem juntas e o eixo começa em R$ 0.
+ * Em percentual o aporte some da conta (é ponderado pelo tempo) e o que sobra
+ * é só o desempenho — que é o que se quer comparar com o CDI.
+ *
+ * Os pontos finais são EXATAMENTE os números do quadro de rendimento
+ * (`performanceOverview`): com histórico mais curto que a janela, a série
+ * começa no primeiro aporte (um ponto a mais, em zero) e a primeira fatia vai
+ * dele até o primeiro snapshot, como em `timeWeightedReturn(…, true)`; senão,
+ * começa no primeiro snapshot da janela.
+ */
+export function cumulativeReturnSeries(
+  history: readonly HistoryPoint[],
+  trades: readonly Trade[],
+  cdi: readonly CdiEntry[],
+): CumulativeReturnPoint[] {
+  const sorted = [...history].sort((a, b) => a.date.localeCompare(b.date))
+  const window = performanceWindow(sorted)
+  const first = sorted[0]
+  if (!first || !window[0]) return []
+
+  const fullHistory = window[0].date === first.date
+  const firstTrade = trades.reduce<string | null>(
+    (earliest, trade) => (earliest === null || trade.date < earliest ? trade.date : earliest),
+    null,
+  )
+  const inception = firstTrade !== null && firstTrade < first.date ? firstTrade : first.date
+  const start = fullHistory ? inception : window[0].date
+
+  const points: CumulativeReturnPoint[] = fullHistory ? [{ date: inception, portfolio: 0, cdi: 0 }] : []
+  let growth = 1
+  window.forEach((point, index) => {
+    if (index > 0 || fullHistory) {
+      const previous = index === 0 ? null : window[index - 1]!
+      const base =
+        (previous?.totalBRL ?? 0) + contributionsBetween(trades, previous?.date ?? null, point.date)
+      // Fatia sem base positiva não tem rendimento a medir — fica neutra,
+      // como em `timeWeightedReturn`.
+      if (base > 0) growth *= point.totalBRL / base
+    }
+    points.push({ date: point.date, portfolio: growth - 1, cdi: cdiFactor(cdi, start, point.date) - 1 })
+  })
+  return points
+}
+
 /** CAGR: o retorno total convertido em taxa anual composta. */
 export function annualize(totalReturn: number, days: number): number | null {
   if (days < MIN_DAYS_FOR_CAGR || totalReturn <= -1) return null

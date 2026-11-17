@@ -454,6 +454,19 @@ export const DATA_SHEETS: DataSheetSpec[] = [
   CONFIG_SHEET,
 ]
 
+/**
+ * Linhas fixas de cada aba: o cabeçalho e o que vem acima dele. Abas de dados
+ * têm o cabeçalho na linha 1; abas de classe têm título na 1 e cabeçalho na 2;
+ * o Painel fixa só a linha do título. Reafirmado pelo `sheet:style` (`styling.ts`) a cada
+ * instalação — antes valia só na criação, e as abas de dados nasceram com 2
+ * linhas fixas, prendendo a primeira linha de dado junto do cabeçalho.
+ */
+export function frozenRowsOf(title: string): number {
+  if (title === SHEET.dashboard) return 1
+  return DATA_SHEETS.some((spec) => spec.title === title) ? 1 : 2
+}
+
+
 // ---------------------------------------------------------------------------
 // Conteúdo inicial de `Config`
 // ---------------------------------------------------------------------------
@@ -651,6 +664,9 @@ const OBJECTIVE_HEADER = 'Objetivo'
 /** Moeda do ativo, só na aba de classe com moeda mista (Exterior) — ver `CLASS_CURRENCY`. */
 export const CURRENCY_HEADER = 'Moeda'
 
+/** Valor de mercado na moeda do ativo, nas abas de classe com cotação. */
+const MARKET_VALUE_HEADER = 'Valor de mercado'
+
 const trades = (range: string) => ref(SHEET.trades, range)
 const assets = (range: string) => ref(SHEET.assets, range)
 const quotes = (range: string) => ref(SHEET.quotes, range)
@@ -747,7 +763,7 @@ function marketColumns(assetClass: AssetClass): ViewColumnSpec[] {
       formula: (row) => guarded(row, `$C${row}*$D${row}`),
     },
     {
-      header: 'Valor de mercado',
+      header: MARKET_VALUE_HEADER,
       format: nativeFormat,
       width: 150,
       formula: (row) => guarded(row, `$C${row}*$E${row}`),
@@ -1235,9 +1251,18 @@ export const DASHBOARD_OBJECTIVE_HEADERS = [
 /** Participação do ativo no patrimônio total, não na classe. */
 const PORTFOLIO_SHARE_HEADER = '% da carteira'
 
+/**
+ * Valor de mercado na moeda do ativo — "US$" para quem é cotado em dólar.
+ *
+ * O "Rendimento %" ao lado é calculado na moeda do ativo (ganho ÷ custo, sem
+ * câmbio). Com o valor em reais na mesma linha, um VOO parecia render em reais
+ * o que rendeu em dólar. Para o peso em reais, "% da carteira".
+ */
+const ASSET_VALUE_HEADER = 'Valor'
+
 export const DASHBOARD_ASSETS_HEADERS = [
   'Ativo',
-  'Valor (R$)',
+  ASSET_VALUE_HEADER,
   'Classe',
   PORTFOLIO_SHARE_HEADER,
   OBJECTIVE_HEADER,
@@ -1260,9 +1285,12 @@ export const DASHBOARD_TABLE_COLUMNS = DASHBOARD_ALLOCATION_HEADERS.length
  * "BBAS3 5%" aqui quer dizer 5% da carteira inteira, não 5% das ações brasileiras.
  *
  * Valor vem antes de Classe (coluna B, depois C) para bater com a ordem das
- * outras tabelas do Painel (Classe/Objetivo já seguem valor-antes-de-categoria
- * em espírito). `SORT`/`FILTER` abaixo se referem à coluna 2 ("Valor (R$)")
- * por índice — mudar a ordem exige mudar esse índice junto. A coluna Objetivo
+ * outras tabelas do Painel. O valor é mostrado NA MOEDA DO ATIVO, como texto
+ * ("US$ 2.812,40"), porque o rendimento % da mesma linha é na moeda do ativo —
+ * ver `ASSET_VALUE_HEADER`. Texto, e não número, porque o formato de número do
+ * Sheets não muda de símbolo por linha. A ordem continua pelo valor em REAIS:
+ * cada bloco leva uma 7ª coluna oculta com ele, que `SORT`/`FILTER` usam por
+ * índice e `CHOOSECOLS` descarta no fim. A coluna Objetivo
  * já sai traduzida porque lê o "Objetivo" de cada aba de classe, que já é
  * rótulo (ver `translated` em `marketColumns`), e a de rendimento % é a mesma
  * célula que a aba de classe mostra — copiada, não recalculada.
@@ -1283,21 +1311,37 @@ export function dashboardAssetsFormula(): string {
     const returns = viewColumnRange(spec.title, spec.returnColumn)
     const label = ASSET_CLASS_LABELS[spec.assetClass]
 
-    // O fallback mantém as 6 colunas quando a classe está vazia: sem ele, um
+    // Renda fixa não tem valor "nativo": é sempre reais, e o total da aba já é ele.
+    const nativeIndex = spec.columns.findIndex((column) => column.header === MARKET_VALUE_HEADER)
+    const native = nativeIndex < 0 ? values : viewColumnRange(spec.title, nativeIndex)
+    const currency = CLASS_CURRENCY[spec.assetClass]
+    const symbol =
+      currency === 'mixed'
+        ? `IF(${viewColumnRange(spec.title, spec.columns.findIndex((column) => column.header === CURRENCY_HEADER))}="USD";"US$ ";"R$ ")`
+        : `"${currency === 'USD' ? 'US$ ' : 'R$ '}"`
+    // `FIXED` formata no locale da planilha ("2.812,40" no pt_BR).
+    const display = `IFERROR(${symbol}&FIXED(${native};2);"")`
+
+    // O fallback mantém as 7 colunas quando a classe está vazia: sem ele, um
     // FILTER sem resultado devolve #N/A e derruba a pilha inteira.
     return (
       `IFERROR(FILTER(` +
-      `{${symbols}${c}${values}${c}IF(${symbols}<>"";"${label}";"")${c}` +
-      `IFERROR(${values}/${NAMED_RANGE.total};0)${c}${objectives}${c}${returns}};` +
+      `{${symbols}${c}${display}${c}IF(${symbols}<>"";"${label}";"")${c}` +
+      `IFERROR(${values}/${NAMED_RANGE.total};0)${c}${objectives}${c}${returns}${c}${values}};` +
       `${symbols}<>"");` +
-      `{""${c}0${c}""${c}0${c}""${c}0})`
+      `{""${c}""${c}""${c}0${c}""${c}0${c}0})`
     )
   })
 
   const stack = `{${blocks.join(FORMULA_TOKEN.arrayRow)}}`
+  const sortKey = DASHBOARD_ASSETS_HEADERS.length + 1
+  const visible = DASHBOARD_ASSETS_HEADERS.map((_, index) => index + 1).join(';')
   // LET evita repetir a pilha inteira duas vezes (uma para filtrar, outra para
   // ordenar). FILTER descarta as linhas de fallback das classes vazias.
-  return `=IFERROR(LET(dados;${stack};SORT(FILTER(dados;INDEX(dados;;2)>0);2;FALSE));"")`
+  return (
+    `=IFERROR(LET(dados;${stack};CHOOSECOLS(` +
+    `SORT(FILTER(dados;INDEX(dados;;${sortKey})>0);${sortKey};FALSE);${visible}));"")`
+  )
 }
 
 /**
@@ -1357,31 +1401,38 @@ function columnLetterOfSchema(index: number): string {
 }
 
 /**
- * Título do gráfico de patrimônio. Duplicado em `apps-script/Code.gs` (não dá
- * para importar TypeScript lá) — é como o `onEdit` acha o gráfico certo para
- * esconder o eixo Y quando o modo privacidade liga.
+ * Título do gráfico de rentabilidade × CDI. O instalador acha o gráfico pelo
+ * título para reposicioná-lo; os títulos antigos ficam em
+ * `LEGACY_HISTORY_CHART_TITLES` para o gráfico da versão anterior ser trocado
+ * em vez de ficar duplicado ao lado do novo.
  */
-export const HISTORY_CHART_TITLE = 'Patrimônio — últimos meses'
+export const HISTORY_CHART_TITLE = 'Rentabilidade × CDI'
+
+/** Títulos que o gráfico de evolução já teve — o instalador apaga e recria. */
+export const LEGACY_HISTORY_CHART_TITLES = ['Patrimônio — últimos meses']
 
 /** Título do gráfico de pizza — usado para achá-lo de novo e reposicioná-lo a cada instalação. */
 export const CLASS_ALLOCATION_CHART_TITLE = 'Alocação por classe'
 
 // ---------------------------------------------------------------------------
-// Evolução: patrimônio × CDI
+// Evolução: rentabilidade acumulada × CDI
 // ---------------------------------------------------------------------------
 
 /**
- * Cabeçalho da série do gráfico de patrimônio — as duas últimas viram a
- * legenda do gráfico, por isso são nome de linha, não de coluna técnica.
+ * Cabeçalho da série do gráfico — as duas últimas viram a legenda. São o
+ * texto de reserva: na planilha a célula leva uma fórmula
+ * (`evolutionHeaderFormulas`) que acrescenta o valor final, como
+ * "Carteira +4,20% · 135% do CDI".
  */
-export const EVOLUTION_DATA_HEADERS = ['Semana', 'Carteira', 'Mesmo dinheiro 100% no CDI']
+export const EVOLUTION_DATA_HEADERS = ['Data', 'Carteira', 'CDI']
 
 /**
- * Teto de pontos da janela de 12 meses. O snapshot é um por semana (53 num
- * ano) — a folga cobre o histórico antigo que ainda tenha linha mensal
- * misturada. O gráfico lê exatamente estas linhas.
+ * Teto de pontos da série. O snapshot é um por semana (53 num ano) — a folga
+ * cobre o histórico antigo que ainda tenha linha mensal misturada, mais o
+ * ponto zero do primeiro aporte quando o histórico é mais curto que a janela.
+ * O gráfico lê exatamente estas linhas.
  */
-export const EVOLUTION_CHART_ROWS = 60
+export const EVOLUTION_CHART_ROWS = 61
 
 export const DASHBOARD_PERFORMANCE_HEADERS = ['Rendimento', 'Carteira', 'CDI', 'CAGR (a.a.)']
 
@@ -1477,19 +1528,53 @@ function cdiLog(date: string): string {
 }
 
 /**
- * A série do gráfico: semana, carteira e "mesmo dinheiro no CDI"
- * (`performanceWindow` + `cdiBenchmarkSeries`). Uma fórmula só, que derrama
- * as três colunas para baixo.
+ * A série do gráfico: data, carteira e CDI ACUMULADOS em % — o espelho de
+ * `cumulativeReturnSeries`. Uma fórmula só, que derrama as três colunas.
+ *
+ * `f` é o fator de cada fatia da rentabilidade ponderada pelo tempo (a mesma
+ * de `twrExpression`, com 1 no lugar de "" para a fatia sem base, que assim
+ * fica neutra no produto acumulado do `SCAN`). Com histórico mais curto que a
+ * janela (`full`), a série ganha um ponto zero no primeiro aporte e a primeira
+ * fatia vai dele até o primeiro snapshot — o último ponto bate com o quadro
+ * de rendimento nos dois casos.
  */
 export function evolutionSeriesFormula(): string {
   return (
     `=IFERROR(ARRAYFORMULA(LET(${evolutionPrelude()}` +
-    `dini;INDEX(wd;1);vini;INDEX(wv;1);lini;${cdiLog('dini')};` +
-    `tl;MAP(td;LAMBDA(t;${cdiLog('t')}));` +
-    `eq;MAP(wd;LAMBDA(d;LET(ld;${cdiLog('d')};` +
-    `vini*EXP(ld-lini)+SUMPRODUCT((td>dini)*(td<=d)*ta*EXP(ld-tl)))));` +
-    `HSTACK(wd;wv;eq)));"")`
+    `st;IF(full;inc;INDEX(wd;1));lst;${cdiLog('st')};` +
+    `f;MAP(SEQUENCE(ROWS(wd));LAMBDA(i;LET(` +
+    `dant;IF(i=1;-1;INDEX(wd;MAX(1;i-1)));` +
+    `vant;IF(i=1;0;INDEX(wv;MAX(1;i-1)));` +
+    `base;vant+SUMPRODUCT((td>dant)*(td<=INDEX(wd;i))*ta);` +
+    `IF(OR(base<=0;AND(i=1;NOT(full)));1;INDEX(wv;i)/base))));` +
+    `g;SCAN(1;f;LAMBDA(a;x;a*x))-1;` +
+    `c;MAP(wd;LAMBDA(d;EXP(${cdiLog('d')}-lst)-1));` +
+    `corpo;HSTACK(wd;g;c);` +
+    `IF(full;VSTACK(HSTACK(st;0;0);corpo);corpo)));"")`
   )
+}
+
+/**
+ * Cabeçalho da série com o valor final — é o texto da LEGENDA do gráfico, à
+ * maneira das corretoras: "Carteira +4,20% · 135% do CDI" e "CDI +3,10%".
+ * Lê o último ponto da própria série, sem refazer a conta. `FIXED` formata no
+ * locale da planilha (vírgula decimal no pt_BR).
+ */
+export function evolutionHeaderFormulas(): string[] {
+  const column = (offset: number) => {
+    const letter = columnLetterOfSchema(DASHBOARD.evolutionDataColumn + offset)
+    const first = DASHBOARD.evolutionDataRow + 1
+    return `$${letter}$${first}:$${letter}$${first + EVOLUTION_CHART_ROWS - 1}`
+  }
+  const last = (range: string) => `INDEX(FILTER(${range};${range}<>"");COUNT(${range}))`
+  const percent = (value: string) => `IF(${value}>=0;"+";"")&FIXED(${value}*100;2)&"%"`
+  const [dateHeader, portfolioHeader, cdiHeader] = EVOLUTION_DATA_HEADERS
+  return [
+    dateHeader!,
+    `=IFERROR(LET(r;${last(column(1))};c;${last(column(2))};` +
+      `"${portfolioHeader} "&${percent('r')}&IF(c>0;" · "&FIXED(r/c*100;0)&"% do CDI";""));"${portfolioHeader}")`,
+    `=IFERROR(LET(c;${last(column(2))};"${cdiHeader} "&${percent('c')});"${cdiHeader}")`,
+  ]
 }
 
 /**

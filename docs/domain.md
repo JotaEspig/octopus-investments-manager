@@ -63,15 +63,20 @@ bolsa gravada cai para a moeda (BRL → B3), que era a regra antes da v9.
 
 ## Evolução contra o CDI (`performance.ts`)
 
-O gráfico de patrimônio do Painel e o quadro de rendimento no topo respondem duas
-perguntas diferentes, com duas contas diferentes:
+O gráfico do Painel (`cumulativeReturnSeries`) e o quadro de rendimento no
+topo contam a MESMA conta: a rentabilidade ponderada pelo tempo, acumulada
+ponto a ponto, contra o CDI acumulado no mesmo período — as duas linhas partem
+de 0% e o último ponto do gráfico é exatamente o número do quadro.
 
-**"E se o mesmo dinheiro tivesse ido todo pro CDI?"** — a linha cinza. Parte do
-patrimônio do primeiro ponto da janela e soma cada aporte (subtrai cada
-resgate e provento) na data em que ele aconteceu, cada um rendendo CDI dali em
-diante. Comparável em reais com a linha da carteira.
+O gráfico já foi de patrimônio em reais contra "o mesmo dinheiro no CDI", e
+foi trocado porque escondia justamente a diferença: o aporte domina a curva, as
+duas linhas sobem juntas e o eixo parte de R$ 0, então quase tudo é área morta.
+Em percentual o aporte sai da conta e sobra só o desempenho. A conta em reais
+continua em `cdiBenchmarkSeries`, usada pelo MCP (`portfolio_evolution`,
+`cdiBRL`). Bônus: o gráfico em % não revela valor absoluto, então o modo
+privacidade não precisa mais esconder o eixo dele.
 
-**"Quanto a carteira rendeu?"** — o quadro. Com aporte mensal, `final ÷ inicial`
+**"Quanto a carteira rendeu?"** Com aporte mensal, `final ÷ inicial`
 mede quanto você depositou, não quanto rendeu. Por isso é rentabilidade
 ponderada pelo tempo (TWR): cada fatia entre dois snapshots rende
 `atual ÷ (anterior + aporte da fatia)`, e as fatias se multiplicam. É a conta

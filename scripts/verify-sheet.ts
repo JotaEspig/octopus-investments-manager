@@ -38,9 +38,8 @@ import {
   ref,
 } from '../src/sheets/schema'
 import {
-  cdiBenchmarkSeries,
+  cumulativeReturnSeries,
   performanceOverview,
-  performanceWindow,
   categoryReturns,
   tradesByCategory,
 } from '../src/domain/performance'
@@ -298,25 +297,24 @@ async function main() {
 
   // 7. Evolução contra o CDI — a série do gráfico e o quadro de rendimento.
   const { history, cdi } = await readPerformanceSeries(context)
-  const window = performanceWindow(history)
-  const benchmark = cdiBenchmarkSeries(window, data.trades, cdi)
+  const expectedSeries = cumulativeReturnSeries(history, data.trades, cdi)
   const series = rowsAt(afterViews + 4).filter((row) => row[0] !== '' && row[0] !== undefined)
-  if (series.length !== window.length) {
+  if (series.length !== expectedSeries.length) {
     divergences.push({
-      where: `${DASHBOARD.title} · gráfico de patrimônio`,
-      what: `pontos na janela de 12 meses (teto: ${EVOLUTION_CHART_ROWS})`,
+      where: `${DASHBOARD.title} · gráfico de rentabilidade`,
+      what: `pontos na série (teto: ${EVOLUTION_CHART_ROWS})`,
       sheet: series.length,
-      code: window.length,
+      code: expectedSeries.length,
     })
   }
-  window.forEach((point, index) => {
+  expectedSeries.forEach((point, index) => {
     const row = series[index] ?? []
     const where = `${DASHBOARD.title} · gráfico ${point.date}`
     if (fromSheetDate(row[0]) !== point.date) {
       divergences.push({ where, what: `data (${String(row[0])})`, sheet: NaN, code: NaN })
     }
-    compare(where, 'carteira', parseNumber(row[1]), point.totalBRL)
-    compare(where, 'mesmo dinheiro no CDI', parseNumber(row[2]), benchmark[index] ?? 0)
+    comparePercent(where, 'carteira acumulada', parseNumber(row[1]), point.portfolio)
+    comparePercent(where, 'CDI acumulado', parseNumber(row[2]), point.cdi)
   })
 
   const overview = performanceOverview(history, data.trades, cdi)
