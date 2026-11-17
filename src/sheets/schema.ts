@@ -23,7 +23,7 @@ import {
 import { MIN_DAYS_FOR_CAGR, PERFORMANCE_WINDOW_MONTHS } from '@/domain/performance'
 
 /** Gravada em `Config`. O instalador compara e avisa quando a planilha está velha. */
-export const SCHEMA_VERSION = 8
+export const SCHEMA_VERSION = 9
 
 /**
  * Chave em `Config` com o carimbo da última execução do Apps Script.
@@ -187,9 +187,8 @@ export const SHEET = {
 
 /** Uma aba de apresentação por classe de ativo. */
 export const VIEW_SHEET: Record<AssetClass, string> = {
-  us_stock: 'Ações EUA',
-  etf: 'ETFs',
   br_stock: 'Ações BR',
+  intl_stock: 'Ações Exterior',
   br_fii: 'FIIs',
   fixed_income: 'Renda Fixa',
 }
@@ -252,14 +251,13 @@ export const NUMBER_FORMAT: Record<ColumnFormat, { type: string; pattern: string
 
 /**
  * Moeda nativa de cada classe. `'mixed'` quando a classe aceita ativos em mais
- * de uma moeda (ETF: tanto o americano quanto o listado na B3 vivem na mesma
- * classe) — nesse caso a moeda é lida do CADASTRO DO ATIVO, linha a linha, em
+ * de uma moeda (Ações Exterior: ação ou ETF americano em dólar e BDR na B3 em
+ * reais vivem na mesma classe) — nesse caso a moeda é lida do CADASTRO DO ATIVO, linha a linha, em
  * vez de presumida pela classe inteira.
  */
 export const CLASS_CURRENCY: Record<AssetClass, Currency | 'mixed'> = {
-  us_stock: 'USD',
-  etf: 'mixed',
   br_stock: 'BRL',
+  intl_stock: 'mixed',
   br_fii: 'BRL',
   fixed_income: 'BRL',
 }
@@ -332,7 +330,7 @@ export const TRADES_SHEET: DataSheetSpec = {
 
 export const ASSETS_SHEET: DataSheetSpec = {
   title: SHEET.assets,
-  writableColumns: 6,
+  writableColumns: 7,
   columns: [
     { key: 'symbol', header: 'Ativo', width: 110 },
     { key: 'name', header: 'Nome', width: 240 },
@@ -343,6 +341,10 @@ export const ASSETS_SHEET: DataSheetSpec = {
     // Vazia em ativo cadastrado antes desta coluna existir — nunca preenchida
     // retroativamente por suposição.
     { key: 'objective', header: 'Objetivo', width: 170 },
+    // Coluna nova no fim (v9): bolsa de negociação (`EXCHANGES`), que decide o
+    // prefixo do GOOGLEFINANCE. Só `intl_stock` tem escolha; as classes
+    // brasileiras são sempre `b3`.
+    { key: 'exchange', header: 'Bolsa', width: 90 },
   ],
 }
 
@@ -457,10 +459,10 @@ export const DATA_SHEETS: DataSheetSpec[] = [
 // ---------------------------------------------------------------------------
 
 /**
- * Metas de alocação do perfil moderado (doc 02 do projeto de estratégia):
- * 40% renda fixa · 40% ETFs · 20% satélite. O satélite ficou inteiro em ações
- * EUA porque a carteira não tem classe "caixa" — a reserva de oportunidade não
- * aparece na pizza enquanto não estiver alocada.
+ * Metas de alocação de uma instalação nova, do perfil moderado (doc 02 do
+ * projeto de estratégia): 40% renda fixa · 60% exterior (ETFs globais no
+ * núcleo, ações no satélite). Não há classe "caixa" — a reserva de
+ * oportunidade não aparece na pizza enquanto não estiver alocada.
  */
 /**
  * Prefixo das chaves de meta de alocação POR OBJETIVO em `Config`.
@@ -484,9 +486,17 @@ export const CONFIG_ROWS: Array<{ key: string; value: string; description: strin
     description: 'Câmbio de hoje. Converte o valor de mercado dos ativos em USD. Delay de ~20 min.',
   },
   { key: 'target_fixed_income', value: '0,40', description: 'Meta de alocação — Renda Fixa.' },
-  { key: 'target_etf', value: '0,40', description: 'Meta de alocação — ETFs (EUA e B3).' },
-  { key: 'target_us_stock', value: '0,20', description: 'Meta de alocação — Ações EUA (satélite).' },
-  { key: 'target_br_stock', value: '0', description: 'Meta de alocação — Ações Brasil.' },
+  // v9: `target_intl_stock` ocupa a linha que era de `target_etf`, e a de
+  // `target_us_stock` foi removida pela migração — a planilha migrada fica
+  // nesta mesma ordem, e o número de linhas antes de `privacy_mode` cai de
+  // cinco metas para quatro dos DOIS lados (ver o aviso sobre
+  // `CONFIG_PRIVACY_ROW` abaixo).
+  {
+    key: 'target_intl_stock',
+    value: '0,60',
+    description: 'Meta de alocação — Ações Exterior (inclui ETF e BDR).',
+  },
+  { key: 'target_br_stock', value: '0', description: 'Meta de alocação — Ações BR (inclui ETF da B3).' },
   { key: 'target_br_fii', value: '0', description: 'Meta de alocação — FIIs.' },
   {
     key: APPS_SCRIPT_LAST_RUN,
@@ -587,9 +597,8 @@ export interface ViewSheetSpec extends ViewLayout {
  * célula: mexer no layout de uma aba não quebra quem depende dela.
  */
 const TOTAL_RANGE_NAME: Record<AssetClass, string> = {
-  us_stock: 'TOTAL_US_STOCK',
-  etf: 'TOTAL_ETF',
   br_stock: 'TOTAL_BR_STOCK',
+  intl_stock: 'TOTAL_INTL_STOCK',
   br_fii: 'TOTAL_BR_FII',
   fixed_income: 'TOTAL_FIXED_INCOME',
 }
@@ -600,9 +609,8 @@ const TOTAL_RANGE_NAME: Record<AssetClass, string> = {
  * NOME, então mexer no layout de uma aba não quebra o Painel.
  */
 const RETURN_RANGE_NAME: Record<AssetClass, string> = {
-  us_stock: 'RETORNO_US_STOCK',
-  etf: 'RETORNO_ETF',
   br_stock: 'RETORNO_BR_STOCK',
+  intl_stock: 'RETORNO_INTL_STOCK',
   br_fii: 'RETORNO_BR_FII',
   fixed_income: 'RETORNO_FIXED_INCOME',
 }
@@ -640,7 +648,7 @@ const VIEW_KEY_COLUMN_WIDTH = 110
 /** Objetivo do ativo, projetado de `Ativos`/`Contratos RF` — usado para somar por objetivo no Painel. */
 const OBJECTIVE_HEADER = 'Objetivo'
 
-/** Moeda do ativo, só na aba de classe com moeda mista (ETF) — ver `CLASS_CURRENCY`. */
+/** Moeda do ativo, só na aba de classe com moeda mista (Exterior) — ver `CLASS_CURRENCY`. */
 export const CURRENCY_HEADER = 'Moeda'
 
 const trades = (range: string) => ref(SHEET.trades, range)
@@ -681,7 +689,7 @@ function marketColumns(assetClass: AssetClass): ViewColumnSpec[] {
   const isUsd = classCurrency === 'USD'
 
   /**
-   * Classe `mixed` (ETF): moeda nativa não é uma constante da aba, é lida do
+   * Classe `mixed` (Exterior): moeda nativa não é uma constante da aba, é lida do
    * cadastro do ativo linha a linha — por isso as colunas "nativas" abaixo
    * usam `'price'` (número puro, sem símbolo de moeda) em vez de `'native'`,
    * mesmo padrão já usado em `Operações`/`Cotações` para colunas que também
@@ -951,7 +959,7 @@ function sumInBRL(layout: ViewLayout, columnIndex: number, objectiveLabel?: stri
  *
  * É a mesma conta da coluna "Rendimento %" um nível acima — e NÃO a média das
  * porcentagens, que daria o mesmo peso a uma posição de mil reais e a uma de
- * cem. Cada parte é uma aba; o rendimento de um objetivo atravessa as cinco.
+ * cem. Cada parte é uma aba; o rendimento de um objetivo atravessa todas.
  */
 function aggregateReturnFormula(parts: Array<{ gain: string; cost: string }>): string {
   const gain = parts.map((part) => part.gain).join('+')
@@ -1293,11 +1301,11 @@ export function dashboardAssetsFormula(): string {
 }
 
 /**
- * Total em BRL de um objetivo, somado através das cinco abas de classe.
+ * Total em BRL de um objetivo, somado através das abas de classe.
  *
  * Ao contrário do total por classe (que tem intervalo nomeado próprio, porque
  * é a soma de UMA aba), o objetivo cruza as classes — o mesmo objetivo aparece
- * em ações, ETFs e renda fixa. Por isso é um SUMIF por aba, somados: cada aba
+ * em ações, FIIs e renda fixa. Por isso é um SUMIF por aba, somados: cada aba
  * já projeta o objetivo do ativo na coluna "Objetivo" (`OBJECTIVE_HEADER`,
  * sempre a última — ver `marketColumns`/`fixedIncomeColumns`) e a coluna
  * "Valor (R$)" continua em `$K`, intocada pela adição.
@@ -1320,7 +1328,7 @@ export function objectiveTotalFormula(objective: Objective): string {
 }
 
 /**
- * Rendimento % de um objetivo, atravessando as cinco abas de classe.
+ * Rendimento % de um objetivo, atravessando todas as abas de classe.
  *
  * Mesmo motivo do `objectiveTotalFormula` acima: o objetivo cruza as classes,
  * então não há um intervalo nomeado por objetivo — é ganho e custo somados aba

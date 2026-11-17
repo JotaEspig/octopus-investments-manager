@@ -44,9 +44,22 @@ INVESTIDOR ganhou. O custo em reais usa o câmbio de **cada compra**, não o de
 hoje. Para posição em dólar a diferença costuma superar o próprio desempenho do
 ativo.
 
-Moeda é propriedade do ATIVO, nunca da classe. ETF é o exemplo: a mesma classe
-tem ativo americano (USD) e ativo listado na B3 (BRL) lado a lado — nada no
-domínio presume que uma classe inteira está numa moeda só.
+Moeda é propriedade do ATIVO, nunca da classe. Ações Exterior é o exemplo: a
+mesma classe tem ativo americano ou de Londres (USD) e BDR na B3 (BRL) lado a
+lado — nada no domínio presume que uma classe inteira está numa moeda só.
+
+## Classes: nacional × exterior (v9)
+
+A classe responde "onde está a exposição", não "que tipo de papel é":
+`br_stock` tem ação e ETF da B3; `intl_stock` tem ação e ETF de fora e também
+BDR; FII e renda fixa têm classe própria. ETF não é classe.
+
+A **bolsa** (`exchange`: `us`, `lse`, `b3`) fica no cadastro do ativo e decide
+o prefixo do GOOGLEFINANCE (`""`, `LON:`, `BVMF:`) e a moeda (`EXCHANGE_CURRENCY`:
+EUA e Londres em dólar, B3 em real). Só Ações Exterior tem escolha — padrão
+EUA; as classes brasileiras são sempre B3. LSE é só em dólar porque o projeto
+não tem GBP/EUR: ETF de Londres cotado em libra não é suportado. Ativo sem
+bolsa gravada cai para a moeda (BRL → B3), que era a regra antes da v9.
 
 ## Evolução contra o CDI (`performance.ts`)
 

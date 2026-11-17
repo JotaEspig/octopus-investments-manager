@@ -170,7 +170,7 @@ describe('abas de apresentação', () => {
 describe('dashboardAssetsFormula', () => {
   const formula = dashboardAssetsFormula()
 
-  it('empilha as cinco seções', () => {
+  it('empilha todas as seções', () => {
     for (const spec of VIEW_SHEETS) {
       expect(formula).toContain(ref(spec.title, '$A$3'))
     }
@@ -235,17 +235,17 @@ describe('rendimento % agregado', () => {
   })
 
   it('converte a classe de moeda mista linha a linha, não em bloco', () => {
-    // ETF tem ativo em dólar e ativo na B3 lado a lado: somar as duas colunas
-    // e multiplicar tudo por CAMBIO inflaria a parte que já está em reais.
-    const etf = VIEW_SHEETS.find((spec) => spec.assetClass === 'etf')!
-    expect(etf.classReturnFormula).toContain('"USD"')
-    expect(etf.classReturnFormula).toContain('"<>USD"')
+    // Ações Exterior tem ativo em dólar e BDR na B3 lado a lado: somar as
+    // duas colunas e multiplicar tudo por CAMBIO inflaria a parte em reais.
+    const intl = VIEW_SHEETS.find((spec) => spec.assetClass === 'intl_stock')!
+    expect(intl.classReturnFormula).toContain('"USD"')
+    expect(intl.classReturnFormula).toContain('"<>USD"')
 
     const brStock = VIEW_SHEETS.find((spec) => spec.assetClass === 'br_stock')!
     expect(brStock.classReturnFormula).not.toContain('CAMBIO')
   })
 
-  it('o rendimento por objetivo soma as cinco abas', () => {
+  it('o rendimento por objetivo soma todas as abas', () => {
     // O objetivo cruza as classes — o mesmo objetivo aparece em ação, ETF e
     // renda fixa, então nenhum intervalo nomeado por aba serve aqui.
     const formula = objectiveReturnFormula('growth')
@@ -316,7 +316,7 @@ describe('janela do rendimento no Painel', () => {
   })
 
   it('total e janelas são a mesma conta, só muda onde começa', () => {
-    const formula = windowedReturnFormula('class', 'etf')
+    const formula = windowedReturnFormula('class', 'intl_stock')
     expect(formula.startsWith('=IF(')).toBe(true)
     expect(formula).toContain('EDATE(MAX(hd);-60)')
     expect(formula).toContain('EDATE(MAX(hd);-12)')
@@ -327,8 +327,9 @@ describe('janela do rendimento no Painel', () => {
   })
 
   it('cada categoria lê a SUA coluna do Histórico', () => {
-    const etf = HISTORY_SHEET.columns.findIndex((column) => column.key === 'etf') + 1
-    expect(windowedReturnFormula('class', 'etf')).toContain(`INDEX(h;;${etf})`)
+    const intl = HISTORY_SHEET.columns.findIndex((column) => column.key === 'intl_stock') + 1
+    expect(intl).toBeGreaterThan(0)
+    expect(windowedReturnFormula('class', 'intl_stock')).toContain(`INDEX(h;;${intl})`)
 
     const growth = HISTORY_SHEET.columns.findIndex((column) => column.key === 'goal_growth') + 1
     expect(windowedReturnFormula('objective', 'growth')).toContain(`INDEX(h;;${growth})`)

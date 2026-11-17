@@ -600,6 +600,82 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
     actions.push('Painel limpo antes de reescrever (evita sobra de layout de versão anterior)')
   }
 
+  // Intervalos nomeados AUSENTES, criados antes de qualquer fórmula.
+  //
+  // Criar um nome que fórmulas JÁ citam falha no Sheets com "Internal error
+  // encountered" (medido na v9: `TOTAL_INTL_STOCK`, citado pelas 100 linhas de
+  // "% da classe", não pôde ser criado depois delas — em qualquer célula).
+  // Criado antes, o nome existe quando a fórmula chega. O passo 6 só
+  // reposiciona (`updateNamedRange`) o que já existe.
+  //
+  // O Painel referencia os totais por NOME, não por célula: mexer no layout de
+  // uma aba de classe não quebra o painel.
+  const existingNamed = new Map<string, string>()
+  for (const named of fresh.namedRanges ?? []) {
+    if (named.name && named.namedRangeId) existingNamed.set(named.name, named.namedRangeId)
+  }
+
+  const namedTargets: Array<{ name: string; sheetTitle: string; row: number; column: number }> = [
+    { name: NAMED_RANGE.fx, sheetTitle: SHEET.config, row: CONFIG_FX_ROW, column: 1 },
+    { name: NAMED_RANGE.total, sheetTitle: DASHBOARD.title, row: DASHBOARD.totalRow, column: 1 },
+    ...OBJECTIVES.map((objective, index) => ({
+      name: objectiveTotalRangeName(objective),
+      sheetTitle: DASHBOARD.title,
+      row: DASHBOARD.objectivesFirstRow + index,
+      column: 1,
+    })),
+    ...VIEW_SHEETS.flatMap((spec) => [
+      { name: spec.totalRangeName, sheetTitle: spec.title, row: 1, column: spec.totalColumn },
+      { name: spec.returnRangeName, sheetTitle: spec.title, row: 1, column: spec.returnColumn },
+    ]),
+  ]
+
+  const rangeOf = (target: (typeof namedTargets)[number]) => {
+    const id = sheetId(target.sheetTitle)
+    if (id === null) return null
+    return {
+      sheetId: id,
+      startRowIndex: target.row - 1,
+      endRowIndex: target.row,
+      startColumnIndex: target.column,
+      endColumnIndex: target.column + 1,
+    }
+  }
+
+  const missingNamed = namedTargets.filter(
+    (target) => !existingNamed.has(target.name) && rangeOf(target) !== null,
+  )
+  if (missingNamed.length > 0) {
+    // As abas de classe são 100% derivadas (sem estado do usuário) e são
+    // reescritas logo abaixo — limpá-las tira de cena as fórmulas que já
+    // citam o nome ausente, que é o que faz o Sheets recusar a criação. O
+    // Painel já foi limpo acima, depois de lidos o checkbox e a janela.
+    const existingViews = VIEW_SHEETS.filter((spec) => sheetsByTitle.has(spec.title))
+    if (existingViews.length > 0) {
+      await api.spreadsheets.values.batchClear({
+        spreadsheetId,
+        requestBody: { ranges: existingViews.map((spec) => spec.title) },
+      })
+    }
+    try {
+      const response = await api.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          requests: missingNamed.map((target) => ({
+            addNamedRange: { namedRange: { name: target.name, range: rangeOf(target)! } },
+          })),
+        },
+      })
+      for (const reply of response.data.replies ?? []) {
+        const named = reply.addNamedRange?.namedRange
+        if (named?.name && named.namedRangeId) existingNamed.set(named.name, named.namedRangeId)
+      }
+    } catch (error) {
+      throw new Error(explainSheetsError(error, context))
+    }
+    for (const target of missingNamed) actions.push(`Intervalo nomeado criado: ${target.name}`)
+  }
+
   const valueRanges: ValueRange[] = [
     ...DATA_SHEETS.map(dataSheetHeader),
     ...VIEW_SHEETS.flatMap(viewSheetContent),
@@ -665,50 +741,16 @@ export async function bootstrapSpreadsheet(context: SheetsContext): Promise<Boot
   // --- 6. Intervalos nomeados, gráficos e ordem ---------------------------
   const structureRequests: sheets_v4.Schema$Request[] = []
 
-  // O Painel referencia os totais por NOME, não por célula: mexer no layout de
-  // uma aba de classe não quebra o painel.
-  const existingNamed = new Map<string, string>()
-  for (const named of fresh.namedRanges ?? []) {
-    if (named.name && named.namedRangeId) existingNamed.set(named.name, named.namedRangeId)
-  }
-
-  const namedTargets: Array<{ name: string; sheetTitle: string; row: number; column: number }> = [
-    { name: NAMED_RANGE.fx, sheetTitle: SHEET.config, row: CONFIG_FX_ROW, column: 1 },
-    { name: NAMED_RANGE.total, sheetTitle: DASHBOARD.title, row: DASHBOARD.totalRow, column: 1 },
-    ...OBJECTIVES.map((objective, index) => ({
-      name: objectiveTotalRangeName(objective),
-      sheetTitle: DASHBOARD.title,
-      row: DASHBOARD.objectivesFirstRow + index,
-      column: 1,
-    })),
-    ...VIEW_SHEETS.flatMap((spec) => [
-      { name: spec.totalRangeName, sheetTitle: spec.title, row: 1, column: spec.totalColumn },
-      { name: spec.returnRangeName, sheetTitle: spec.title, row: 1, column: spec.returnColumn },
-    ]),
-  ]
-
   for (const target of namedTargets) {
-    const id = sheetId(target.sheetTitle)
-    if (id === null) continue
-    const range = {
-      sheetId: id,
-      startRowIndex: target.row - 1,
-      endRowIndex: target.row,
-      startColumnIndex: target.column,
-      endColumnIndex: target.column + 1,
-    }
+    const range = rangeOf(target)
     const existingId = existingNamed.get(target.name)
-    if (existingId) {
-      structureRequests.push({
-        updateNamedRange: {
-          namedRange: { namedRangeId: existingId, name: target.name, range },
-          fields: 'range',
-        },
-      })
-    } else {
-      structureRequests.push({ addNamedRange: { namedRange: { name: target.name, range } } })
-      actions.push(`Intervalo nomeado criado: ${target.name}`)
-    }
+    if (range === null || !existingId) continue
+    structureRequests.push({
+      updateNamedRange: {
+        namedRange: { namedRangeId: existingId, name: target.name, range },
+        fields: 'range',
+      },
+    })
   }
 
   // Checkbox do modo privacidade. Reaplicar a validação não apaga o valor da

@@ -58,9 +58,8 @@ const DASHBOARD_PRIVACY_COL = 8 // H — privacyCheckboxColumn (0-based 7) + 1
 const HISTORY_CHART_TITLE = 'Patrimônio — últimos meses'
 
 const CLASS_TOTAL_RANGES = [
-  'TOTAL_US_STOCK',
-  'TOTAL_ETF',
   'TOTAL_BR_STOCK',
+  'TOTAL_INTL_STOCK',
   'TOTAL_BR_FII',
   'TOTAL_FIXED_INCOME',
 ]
@@ -70,7 +69,7 @@ const CLASS_TOTAL_RANGES = [
  * `src/domain/types.ts` — trocar a ordem lá sem trocar aqui embaralha o
  * histórico em silêncio.
  */
-const CLASS_ORDER = ['us_stock', 'etf', 'br_stock', 'br_fii', 'fixed_income']
+const CLASS_ORDER = ['br_stock', 'intl_stock', 'br_fii', 'fixed_income']
 
 /**
  * Chaves de objetivo, na ordem das colunas de objetivo do `Histórico` (depois
@@ -107,13 +106,14 @@ function onOpen() {
     .addItem('Atualizar agora', 'dailyUpdate')
     .addItem('Gravar snapshot da semana', 'snapshotWeekly')
     .addItem('Reconstruir meses faltantes', 'backfillHistoryWithFeedback')
+    .addItem('Reconstruir histórico por classe', 'backfillClassesWithFeedback')
     .addItem('Reconstruir histórico por objetivo', 'backfillObjectivesWithFeedback')
     .addSeparator()
     .addItem('Ativar atualização diária', 'installTriggers')
     .addItem('Desativar atualização diária', 'removeTriggers')
     .addSeparator()
     .addItem('Reparar fórmulas de cotação', 'repairQuotes')
-    .addItem('Formatar moeda dos ETFs', 'formatEtfCurrency')
+    .addItem('Formatar moeda de Ações Exterior', 'formatMixedCurrency')
     .addToUi()
 }
 
@@ -248,7 +248,7 @@ function dailyUpdate() {
   refreshQuotes()
   fetchCdi()
   repriceFixedIncome()
-  formatEtfCurrency()
+  formatMixedCurrency()
   snapshotWeekly()
   recordLastRun()
 }
@@ -373,12 +373,10 @@ function refreshQuotes() {
  *
  * Rede de segurança do `refreshQuotes`, e também a saída para quando uma
  * fórmula é apagada sem querer. Espelha `quoteFormula()` de
- * `src/sheets/repositories.ts` — o prefixo `BVMF:` depende da MOEDA, não da
- * classe: ETF pode ser americano (USD) ou listado na B3 (BRL) dentro da
- * mesma classe, então BRL já é o sinal certo de "está na B3".
+ * `src/sheets/repositories.ts` — o prefixo vem da BOLSA (`tickerFor`).
  */
 function repairQuotes() {
-  const assets = readRows(sheetByName(SHEETS.assets), 4)
+  const assets = readRows(sheetByName(SHEETS.assets), 7)
   const quotes = sheetByName(SHEETS.quotes)
 
   const rows = []
@@ -387,8 +385,8 @@ function repairQuotes() {
     if (!symbol) continue
 
     const currency = String(assets[i][3] || 'BRL').trim()
-    const brazilian = currency === 'BRL'
-    const ticker = brazilian ? 'BVMF:' + symbol : symbol
+    const exchange = String(assets[i][6] || '').trim()
+    const ticker = tickerFor(symbol, currency, exchange)
 
     rows.push([symbol, '=GOOGLEFINANCE("' + ticker + '";"price")', currency])
   }
@@ -402,8 +400,21 @@ function repairQuotes() {
 }
 
 /**
- * Título da aba de apresentação do ETF e layout das colunas nativas nela —
- * duplicado de propósito de `VIEW_SHEET.etf`/`VIEW_FIRST_ROW`/`VIEW_ROWS` em
+ * Ticker do GOOGLEFINANCE pela bolsa do ativo (coluna "Bolsa" de `Ativos`):
+ * `b3` → `BVMF:`, `lse` → `LON:`, `us` → sem prefixo. Ativo sem bolsa gravada
+ * (anterior à v9) cai para a moeda — BRL era o sinal de "está na B3".
+ * Espelha `googleFinanceTicker()` de `src/sheets/repositories.ts`.
+ */
+function tickerFor(symbol, currency, exchange) {
+  const venue = exchange || (currency === 'BRL' ? 'b3' : 'us')
+  if (venue === 'b3') return 'BVMF:' + symbol
+  if (venue === 'lse') return 'LON:' + symbol
+  return symbol
+}
+
+/**
+ * Título da aba de apresentação de Ações Exterior e layout das colunas nativas nela —
+ * duplicado de propósito de `VIEW_SHEET.intl_stock`/`VIEW_FIRST_ROW`/`VIEW_ROWS` em
  * `src/sheets/schema.ts`. É a única aba de apresentação que o Apps Script
  * toca: o Sheets não deixa o FORMATO de uma célula variar conforme o VALOR de
  * outra célula, e a moeda de cada linha (coluna N, "Moeda") só existe depois
@@ -411,33 +422,33 @@ function repairQuotes() {
  * `schema.ts` não sabe formatar por linha, e isto vira trabalho do Apps
  * Script, junto dos outros ajustes que dependem de dado vivo.
  */
-const ETF_SHEET_TITLE = 'ETFs'
-const ETF_VIEW_FIRST_ROW = 3
-const ETF_VIEW_ROWS = 100
+const MIXED_SHEET_TITLE = 'Ações Exterior'
+const MIXED_VIEW_FIRST_ROW = 3
+const MIXED_VIEW_ROWS = 100
 /** Colunas D:I — Preço médio, Cotação, Custo total, Valor de mercado, Proventos, Rendimento. */
-const ETF_NATIVE_FIRST_COL = 4
-const ETF_NATIVE_NUM_COLS = 6
+const MIXED_NATIVE_FIRST_COL = 4
+const MIXED_NATIVE_NUM_COLS = 6
 /** Coluna N — "Moeda", última coluna de `marketColumns` quando a classe é mista. */
-const ETF_CURRENCY_COL = 14
+const MIXED_CURRENCY_COL = 14
 
 /** Mesmos padrões de `usd`/`brl` em `NUMBER_FORMAT` de `src/sheets/schema.ts`. */
-const ETF_USD_FORMAT = '"US$" #,##0.00'
-const ETF_BRL_FORMAT = '"R$" #,##0.00'
+const MIXED_USD_FORMAT = '"US$" #,##0.00'
+const MIXED_BRL_FORMAT = '"R$" #,##0.00'
 
 /**
- * Aplica `US$`/`R$` célula a célula na aba "ETFs", conforme a moeda de cada
+ * Aplica `US$`/`R$` célula a célula na aba "Ações Exterior", conforme a moeda de cada
  * linha (coluna "Moeda", projetada do cadastro em `Ativos`).
  *
- * Precisa rodar de novo sempre que a lista de ETFs muda: a ordem das linhas
+ * Precisa rodar de novo sempre que a lista de ativos do exterior muda: a ordem das linhas
  * vem do `SORT`/`FILTER` da coluna A, então um ativo novo pode empurrar todo
  * mundo pra baixo. É por isso que faz parte do `dailyUpdate` — e também tem
  * item de menu próprio para quando não dá pra esperar o próximo dia.
  */
-function formatEtfCurrency() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ETF_SHEET_TITLE)
+function formatMixedCurrency() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(MIXED_SHEET_TITLE)
   if (!sheet) return 0
 
-  const range = sheet.getRange(ETF_VIEW_FIRST_ROW, 1, ETF_VIEW_ROWS, ETF_CURRENCY_COL)
+  const range = sheet.getRange(MIXED_VIEW_FIRST_ROW, 1, MIXED_VIEW_ROWS, MIXED_CURRENCY_COL)
   const rows = range.getValues()
 
   let count = 0
@@ -445,10 +456,10 @@ function formatEtfCurrency() {
     const symbol = String(rows[i][0] || '').trim()
     if (!symbol) continue
 
-    const currency = String(rows[i][ETF_CURRENCY_COL - 1] || '').trim()
-    const format = currency === 'USD' ? ETF_USD_FORMAT : ETF_BRL_FORMAT
+    const currency = String(rows[i][MIXED_CURRENCY_COL - 1] || '').trim()
+    const format = currency === 'USD' ? MIXED_USD_FORMAT : MIXED_BRL_FORMAT
     sheet
-      .getRange(ETF_VIEW_FIRST_ROW + i, ETF_NATIVE_FIRST_COL, 1, ETF_NATIVE_NUM_COLS)
+      .getRange(MIXED_VIEW_FIRST_ROW + i, MIXED_NATIVE_FIRST_COL, 1, MIXED_NATIVE_NUM_COLS)
       .setNumberFormat(format)
     count += 1
   }
@@ -835,6 +846,82 @@ function backfillObjectives() {
   return result
 }
 
+/**
+ * Preenche as colunas de CLASSE do `Histórico` que estiverem vazias nas linhas
+ * que já existem.
+ *
+ * A v9 trocou "Ações EUA" + "ETFs" por "Ações BR" + "Ações Exterior". A coluna
+ * "ETFs" misturava ETF da B3 com ETF americano, então não havia como dividir o
+ * valor gravado: a migração apagou as duas colunas novas e é esta função que
+ * as reconstrói, pelo mesmo caminho de `backfillObjectives` — posição pelo
+ * livro-razão, cotação histórica e a classe cadastrada HOJE.
+ *
+ * Só escreve célula vazia: FIIs e Renda Fixa, que a migração preservou,
+ * continuam como foram gravados. Relata a maior diferença entre o total
+ * recalculado e o gravado, como conferência.
+ */
+function backfillClassesWithFeedback() {
+  const result = backfillClasses()
+  SpreadsheetApp.getUi().alert(
+    result.filled === 0
+      ? 'Nenhuma linha do histórico com classe vazia.'
+      : result.filled +
+          ' linha(s) do histórico preenchida(s) por classe.\n\n' +
+          'Maior diferença entre o total recalculado e o gravado: R$ ' +
+          result.maxDiff.toFixed(2) +
+          ' (' + (result.maxDiffPct * 100).toFixed(2) + '%), em ' + result.maxDiffDate + '.\n\n' +
+          'Valores por classe calculados com a cotação de fechamento de cada data, a posição ' +
+          'que o livro-razão tinha naquele momento e a classe cadastrada hoje.',
+  )
+}
+
+function backfillClasses() {
+  const sheet = sheetByName(SHEETS.history)
+  const firstClassColumn = 3
+  const rows = readRows(sheet, firstClassColumn + CLASS_ORDER.length - 1)
+  const result = { filled: 0, maxDiff: 0, maxDiffPct: 0, maxDiffDate: '' }
+
+  const todo = []
+  for (let i = 0; i < rows.length; i += 1) {
+    let blank = false
+    for (let j = 0; j < CLASS_ORDER.length; j += 1) {
+      if (rows[i][firstClassColumn - 1 + j] === '') blank = true
+    }
+    if (blank && rows[i][0]) todo.push(i)
+  }
+  if (todo.length === 0) return result
+
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet()
+  const scratch = spreadsheet.insertSheet('__backfill__')
+  try {
+    for (let k = 0; k < todo.length; k += 1) {
+      const i = todo[k]
+      const asOf = toIso(rows[i][0])
+      const fresh = portfolioValueAt(asOf, scratch)
+
+      const classes = []
+      for (let j = 0; j < CLASS_ORDER.length; j += 1) {
+        const stored = rows[i][firstClassColumn - 1 + j]
+        classes.push(stored === '' ? fresh[firstClassColumn - 1 + j] : stored)
+      }
+      sheet.getRange(i + 2, firstClassColumn, 1, classes.length).setValues([classes])
+
+      const stored = Number(rows[i][1]) || 0
+      const diff = Math.abs(fresh[1] - stored)
+      if (diff > result.maxDiff) {
+        result.maxDiff = diff
+        result.maxDiffPct = stored > 0 ? diff / stored : 0
+        result.maxDiffDate = asOf
+      }
+      result.filled += 1
+    }
+  } finally {
+    spreadsheet.deleteSheet(scratch)
+  }
+
+  return result
+}
+
 /** Meses entre o primeiro aporte e hoje que não têm linha no histórico. */
 function missingMonths() {
   const trades = readRows(sheetByName(SHEETS.trades), 2)
@@ -887,7 +974,7 @@ function lastDayOfMonth(yyyymm) {
  * resultado e descarta — uma ida à rede por mês, e não por ativo.
  */
 function portfolioValueAt(asOf, scratch) {
-  const assets = readRows(sheetByName(SHEETS.assets), 6)
+  const assets = readRows(sheetByName(SHEETS.assets), 7)
   const symbols = []
   const formulas = []
 
@@ -897,9 +984,9 @@ function portfolioValueAt(asOf, scratch) {
     const assetClass = String(assets[i][2] || '').trim()
     const currency = String(assets[i][3] || 'BRL').trim()
     const objective = String(assets[i][5] || '').trim()
-    const brazilian = currency === 'BRL'
+    const exchange = String(assets[i][6] || '').trim()
     symbols.push({ symbol: symbol, assetClass: assetClass, currency: currency, objective: objective })
-    formulas.push([historicalCloseFormula(brazilian ? 'BVMF:' + symbol : symbol, asOf)])
+    formulas.push([historicalCloseFormula(tickerFor(symbol, currency, exchange), asOf)])
   }
 
   // Câmbio da data vai na última linha do bloco.

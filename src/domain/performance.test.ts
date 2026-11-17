@@ -224,7 +224,7 @@ describe('categoryReturns', () => {
 describe('tradesByCategory', () => {
   it('contrato de renda fixa vence o cadastro de ativos', () => {
     const grouped = tradesByCategory(
-      [{ symbol: 'AAA', name: '', assetClass: 'br_stock', currency: 'BRL', broker: '', objective: 'growth' }],
+      [{ symbol: 'AAA', name: '', assetClass: 'br_stock', currency: 'BRL', broker: '', objective: 'growth', exchange: 'b3' }],
       [{ symbol: 'RF-1', objective: 'liquidity' } as never],
       [trade({ symbol: 'AAA' }), trade({ symbol: 'RF-1' }), trade({ symbol: 'ZZZ' })],
     )

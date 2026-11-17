@@ -5,6 +5,7 @@ import {
   applyInOrder,
   compareHeaders,
   pendingMigrations,
+  reclassifyV9,
   type Migration,
 } from './migrations'
 
@@ -232,5 +233,31 @@ describe('a migração para a v2', () => {
     // teste falha e alguém precisa reconsiderar o `touchesData`.
     const v2 = MIGRATIONS.find((migration) => migration.to === 2)!
     expect(v2.touchesData).toBe(false)
+  })
+})
+
+describe('a migração para a v9', () => {
+  it('toca dados — reescreve Classe e apaga colunas do Histórico', () => {
+    expect(MIGRATIONS.find((migration) => migration.to === 9)!.touchesData).toBe(true)
+  })
+
+  it('separa nacional de exterior pela moeda do ETF', () => {
+    expect(reclassifyV9('etf', 'USD')).toEqual({ assetClass: 'intl_stock', exchange: 'us' })
+    expect(reclassifyV9('etf', 'BRL')).toEqual({ assetClass: 'br_stock', exchange: 'b3' })
+  })
+
+  it('ação americana vira exterior; em reais, só pode ser BDR', () => {
+    expect(reclassifyV9('us_stock', 'USD')).toEqual({ assetClass: 'intl_stock', exchange: 'us' })
+    expect(reclassifyV9('us_stock', 'BRL')).toEqual({ assetClass: 'intl_stock', exchange: 'b3' })
+  })
+
+  it('classes brasileiras ficam onde estão, na B3', () => {
+    expect(reclassifyV9('br_stock', 'BRL')).toEqual({ assetClass: 'br_stock', exchange: 'b3' })
+    expect(reclassifyV9('br_fii', 'BRL')).toEqual({ assetClass: 'br_fii', exchange: 'b3' })
+  })
+
+  it('é idempotente — rodar de novo não muda o que já migrou', () => {
+    expect(reclassifyV9('intl_stock', 'USD').assetClass).toBe('intl_stock')
+    expect(reclassifyV9('intl_stock', 'BRL').assetClass).toBe('intl_stock')
   })
 })

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createTradeSchema } from '@/lib/schemas'
+import { assetInputSchema, createTradeSchema } from '@/lib/schemas'
 import { GRID_GROWTH_ROWS, escapeSheetsFormula, formula, quoteFormula, rowsToAppend } from './repositories'
 
 /**
@@ -59,6 +59,43 @@ describe('formula()', () => {
     expect(quoteFormula('HGLG11', 'BRL')).toContain('BVMF:HGLG11')
     expect(quoteFormula('VOO', 'USD')).not.toContain('BVMF')
     expect(quoteFormula('BOVA11', 'BRL')).toContain('BVMF:BOVA11')
+  })
+
+  it('com bolsa gravada, o prefixo vem da bolsa', () => {
+    expect(quoteFormula('VOO', 'USD', 'us')).toContain('"VOO"')
+    expect(quoteFormula('VWRA', 'USD', 'lse')).toContain('"LON:VWRA"')
+    // BDR: exterior na classe, B3 na bolsa.
+    expect(quoteFormula('AAPL34', 'BRL', 'b3')).toContain('"BVMF:AAPL34"')
+  })
+})
+
+describe('cadastro de ativo — bolsa e moeda', () => {
+  const asset = (extra: Record<string, unknown>) =>
+    assetInputSchema.safeParse({
+      symbol: 'VOO',
+      name: 'Vanguard S&P 500',
+      broker: 'Avenue',
+      objective: 'growth',
+      ...extra,
+    })
+
+  it('Ações Exterior sem bolsa vale EUA', () => {
+    const parsed = asset({ assetClass: 'intl_stock', currency: 'USD' })
+    expect(parsed.success && parsed.data.exchange).toBe('us')
+  })
+
+  it('aceita BDR em reais na B3 dentro de Ações Exterior', () => {
+    expect(asset({ assetClass: 'intl_stock', currency: 'BRL', exchange: 'b3' }).success).toBe(true)
+  })
+
+  it('recusa moeda que não bate com a bolsa', () => {
+    expect(asset({ assetClass: 'intl_stock', currency: 'BRL', exchange: 'us' }).success).toBe(false)
+    expect(asset({ assetClass: 'intl_stock', currency: 'BRL', exchange: 'lse' }).success).toBe(false)
+  })
+
+  it('Ações BR só existe na B3', () => {
+    expect(asset({ assetClass: 'br_stock', currency: 'BRL' }).success).toBe(true)
+    expect(asset({ assetClass: 'br_stock', currency: 'USD', exchange: 'us' }).success).toBe(false)
   })
 })
 

@@ -58,6 +58,29 @@ tem de fato, em vez de presumir.
 O custo em reais usa o câmbio de **cada compra**, não o de hoje. É o que foi
 efetivamente desembolsado.
 
+### Classe é exposição geográfica, não tipo de papel
+As classes separam **nacional de exterior**, não ação de ETF:
+
+- `br_stock` (Ações BR) — ação **e ETF** da B3 (um BOVA11 entra aqui).
+- `intl_stock` (Ações Exterior) — ação **e ETF** de fora, **e também BDR**.
+- `br_fii` (FIIs) e `fixed_income` (Renda Fixa) — classes próprias.
+
+Por isso "quanto tenho em ETF" não sai da alocação por classe: consulte
+`portfolio_positions` e olhe os ativos. E "quanto tenho fora do Brasil" sai
+direto da classe `intl_stock`.
+
+O campo `exchange` de cada posição diz **onde o ativo é negociado**: `us`
+(NYSE/NASDAQ), `lse` (Londres) ou `b3`. Em `intl_stock`, `b3` significa **BDR**:
+exposição de fora, mas negociado em reais na B3 — então `currency` é BRL e
+`*Native` já está em reais, sem câmbio aparente, embora o preço do BDR
+acompanhe o dólar por baixo. Não trate um BDR como "sem risco cambial".
+`exchange` vazio é ativo cadastrado antes do campo existir (ou renda fixa).
+
+A série histórica de classe (`portfolio_evolution`, `byClass`) depende de o
+usuário ter rodado `Carteira → Reconstruir histórico por classe` depois da
+migração v9 — antes disso ela vem vazia nos pontos antigos. Se a janela por
+classe parecer curta ou vazia, avise em vez de concluir que não há dado.
+
 ### XIRR ≠ retorno simples
 `simpleReturn` é `valor/custo − 1`. Com aportes mensais ele **subestima** o
 desempenho, porque trata igual o dinheiro que ficou anos investido e o que
